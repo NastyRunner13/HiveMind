@@ -1,0 +1,20 @@
+# Web framework
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+
+# Database
+sqlalchemy[asyncio]>=2.0.36
+asyncpg>=0.30.0
+alembic>=1.14.0
+
+# Slack integration
+slack-bolt>=1.21.0
+slack-sdk>=3.33.0
+
+# Configuration
+pydantic-settings>=2.6.0
+python-dotenv>=1.0.0
+
+# Utilities
+python-dateutil>=2.9.0
+httpx>=0.28.0
