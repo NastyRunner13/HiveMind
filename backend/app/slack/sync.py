@@ -11,7 +11,7 @@ Slack's rate limits (built into the slack-sdk client).
 """
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 
 from slack_sdk.web.async_client import AsyncWebClient
 
@@ -40,9 +40,7 @@ async def _ensure_workspace(client: AsyncWebClient) -> None:
     team_url = auth.get("url", "")
     # Extract domain from team URL (e.g., "https://myteam.slack.com/" -> "myteam")
     domain = team_url.replace("https://", "").replace(".slack.com/", "")
-    await get_or_create_workspace(
-        slack_team_id=team_id, name=team_name, domain=domain
-    )
+    await get_or_create_workspace(slack_team_id=team_id, name=team_name, domain=domain)
     logger.info(f"Workspace ensured: {team_name} ({team_id})")
 
 
@@ -257,22 +255,14 @@ async def sync_workspace_files(
             try:
                 # Determine the primary channel (first share channel)
                 channels = list(
-                    file_info.get("shares", {})
-                    .get("public", {})
-                    .keys()
-                ) or list(
-                    file_info.get("shares", {})
-                    .get("private", {})
-                    .keys()
-                )
+                    file_info.get("shares", {}).get("public", {}).keys()
+                ) or list(file_info.get("shares", {}).get("private", {}).keys())
                 channel_id = channels[0] if channels else None
                 await ingest_file_metadata(file_info, channel_id)
                 stats["ingested"] += 1
             except Exception as e:
                 stats["errors"] += 1
-                logger.error(
-                    f"Failed to ingest file metadata: {e}", exc_info=True
-                )
+                logger.error(f"Failed to ingest file metadata: {e}", exc_info=True)
 
         paging = result.get("paging", {})
         if page >= paging.get("pages", 1):

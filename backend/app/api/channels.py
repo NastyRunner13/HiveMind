@@ -7,8 +7,8 @@ Provides:
 - POST /api/v1/channels/sync — trigger manual Slack sync
 """
 
-import uuid
 import logging
+import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -35,9 +35,7 @@ async def list_all_channels(
     channel_type: ChannelType | None = Query(
         None, description="Filter by channel type"
     ),
-    include_archived: bool = Query(
-        False, description="Include archived channels"
-    ),
+    include_archived: bool = Query(False, description="Include archived channels"),
     db: AsyncSession = Depends(get_db),
 ) -> ChannelListResponse:
     """

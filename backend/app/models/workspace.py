@@ -27,17 +27,11 @@ class Workspace(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     domain: Mapped[str] = mapped_column(String(255), nullable=True)
 
     # Whether this workspace is actively being monitored
-    is_active: Mapped[bool] = mapped_column(
-        Boolean, default=True, nullable=False
-    )
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
     # ── Relationships ────────────────────────────────────────────
-    channels = relationship(
-        "Channel", back_populates="workspace", lazy="selectin"
-    )
-    users = relationship(
-        "SlackUser", back_populates="workspace", lazy="selectin"
-    )
+    channels = relationship("Channel", back_populates="workspace", lazy="selectin")
+    users = relationship("SlackUser", back_populates="workspace", lazy="selectin")
     messages = relationship("Message", back_populates="workspace")
     files = relationship("FileMetadata", back_populates="workspace")
 

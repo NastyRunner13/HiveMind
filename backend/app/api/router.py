@@ -5,7 +5,6 @@ API Router — aggregates all route modules under the /api/v1 prefix.
 from fastapi import APIRouter
 
 from app.api.channels import router as channels_router
-from app.api.health import router as health_router
 from app.api.messages import router as messages_router
 
 # Main API router — all sub-routers are included under this

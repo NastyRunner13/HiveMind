@@ -29,28 +29,18 @@ class SlackUser(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     # ── Slack Identifiers ────────────────────────────────────────
     # Slack's user ID (e.g., "U024BE7LH") — unique within a workspace
-    slack_user_id: Mapped[str] = mapped_column(
-        String(32), nullable=False, index=True
-    )
+    slack_user_id: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
 
     # ── Profile Info ─────────────────────────────────────────────
     display_name: Mapped[str] = mapped_column(String(255), nullable=False)
-    real_name: Mapped[str] = mapped_column(
-        String(255), nullable=False, default=""
-    )
+    real_name: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     email: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     # ── Flags ────────────────────────────────────────────────────
     is_bot: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    is_admin: Mapped[bool] = mapped_column(
-        Boolean, default=False, nullable=False
-    )
-    is_owner: Mapped[bool] = mapped_column(
-        Boolean, default=False, nullable=False
-    )
-    is_active: Mapped[bool] = mapped_column(
-        Boolean, default=True, nullable=False
-    )
+    is_admin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_owner: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
     # ── Extra Profile ────────────────────────────────────────────
     avatar_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)

@@ -8,11 +8,10 @@ Verifies that each event type:
 - Skips events that should be filtered out
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from slack_bolt.async_app import AsyncApp
-
 
 # ═════════════════════════════════════════════════════════════════
 # HELPER: Register handlers on a real AsyncApp and extract them
@@ -32,6 +31,7 @@ def _build_app_with_handlers():
         # Disable token verification for unit testing
     )
     from app.slack.events import register_event_handlers
+
     register_event_handlers(app)
     return app
 
@@ -47,17 +47,18 @@ class TestHandleMessage:
     @pytest.mark.asyncio
     @patch("app.slack.events.logger")
     @patch("app.services.ingestion.ingest_message", new_callable=AsyncMock)
-    async def test_message_calls_ingestion(self, mock_ingest, mock_logger, sample_message_event):
+    async def test_message_calls_ingestion(
+        self, mock_ingest, mock_logger, sample_message_event
+    ):
         """A normal message should call ingest_message."""
-        app = _build_app_with_handlers()
+        _app = _build_app_with_handlers()
 
         # Simulate the event handler directly
         # Find the registered handler for 'message' events
-        mock_say = AsyncMock()
-        mock_client = AsyncMock()
+        _mock_say = AsyncMock()
+        _mock_client = AsyncMock()
 
         # Call the handler by dispatching through the event
-        from app.slack.events import register_event_handlers
 
         # Create a fresh app and manually call the handler
         handler_app = AsyncApp(token="xoxb-test", signing_secret="test-secret")
@@ -102,7 +103,9 @@ class TestHandleMessage:
 
     @pytest.mark.asyncio
     @patch("app.services.ingestion.ingest_message", new_callable=AsyncMock)
-    async def test_message_ingestion_error_handled(self, mock_ingest, sample_message_event):
+    async def test_message_ingestion_error_handled(
+        self, mock_ingest, sample_message_event
+    ):
         """If ingest_message raises, the handler should catch it (not crash)."""
         mock_ingest.side_effect = Exception("DB connection failed")
 
@@ -275,7 +278,9 @@ class TestHandleMessageChanged:
         mock_edit.assert_called_once_with(sample_message_changed_event)
 
     @pytest.mark.asyncio
-    async def test_message_changed_has_both_versions(self, sample_message_changed_event):
+    async def test_message_changed_has_both_versions(
+        self, sample_message_changed_event
+    ):
         """The event should contain both old and new message text."""
         new_text = sample_message_changed_event["message"]["text"]
         old_text = sample_message_changed_event["previous_message"]["text"]
@@ -297,6 +302,7 @@ class TestEventRegistration:
         app = AsyncApp(token="xoxb-test", signing_secret="test-secret")
 
         from app.slack.events import register_event_handlers
+
         # Should not raise
         register_event_handlers(app)
 
@@ -305,5 +311,6 @@ class TestEventRegistration:
         app = AsyncApp(token="xoxb-test", signing_secret="test-secret")
 
         from app.slack.events import register_event_handlers
+
         register_event_handlers(app)
         register_event_handlers(app)

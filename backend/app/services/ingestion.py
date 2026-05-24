@@ -37,7 +37,7 @@ async def get_or_create_workspace(
 ) -> Workspace:
     """
     Get an existing workspace or create one if it doesn't exist.
-    
+
     This is the top-level entity — we need a workspace before
     we can store any channels, users, or messages.
     """
@@ -66,9 +66,7 @@ async def _get_workspace_id(session, slack_team_id: str = None):
     """Get the workspace ID. For now, returns the first active workspace."""
     if slack_team_id:
         result = await session.execute(
-            select(Workspace.id).where(
-                Workspace.slack_team_id == slack_team_id
-            )
+            select(Workspace.id).where(Workspace.slack_team_id == slack_team_id)
         )
     else:
         result = await session.execute(
@@ -121,15 +119,11 @@ async def ingest_message(event: dict) -> None:
             return
 
         slack_channel_id = event.get("channel")
-        channel_id = await _resolve_channel_id(
-            session, slack_channel_id, workspace_id
-        )
+        channel_id = await _resolve_channel_id(session, slack_channel_id, workspace_id)
 
         if not channel_id:
             # Channel not yet synced — auto-create a placeholder
-            logger.debug(
-                f"Channel {slack_channel_id} not found, creating placeholder"
-            )
+            logger.debug(f"Channel {slack_channel_id} not found, creating placeholder")
             channel = Channel(
                 workspace_id=workspace_id,
                 slack_channel_id=slack_channel_id,
@@ -140,9 +134,7 @@ async def ingest_message(event: dict) -> None:
             await session.flush()
             channel_id = channel.id
 
-        sender_id = await _resolve_user_id(
-            session, event.get("user"), workspace_id
-        )
+        sender_id = await _resolve_user_id(session, event.get("user"), workspace_id)
 
         # Determine message type
         msg_type = MessageType.USER
@@ -157,9 +149,7 @@ async def ingest_message(event: dict) -> None:
 
         # Parse the Slack timestamp into a datetime
         slack_ts = event.get("ts", "0")
-        slack_sent_at = datetime.fromtimestamp(
-            float(slack_ts), tz=timezone.utc
-        )
+        slack_sent_at = datetime.fromtimestamp(float(slack_ts), tz=timezone.utc)
 
         message = Message(
             workspace_id=workspace_id,
@@ -207,14 +197,10 @@ async def ingest_message(event: dict) -> None:
         await session.execute(stmt)
         await session.commit()
 
-        logger.debug(
-            f"Ingested message {slack_ts} in channel {slack_channel_id}"
-        )
+        logger.debug(f"Ingested message {slack_ts} in channel {slack_channel_id}")
 
 
-async def ingest_message_from_history(
-    msg: dict, slack_channel_id: str
-) -> None:
+async def ingest_message_from_history(msg: dict, slack_channel_id: str) -> None:
     """
     Ingest a message from conversations.history API response.
 
@@ -255,9 +241,7 @@ async def handle_message_edit(event: dict) -> None:
         slack_ts = message_data.get("ts")
         channel_id_str = event.get("channel")
 
-        channel_id = await _resolve_channel_id(
-            session, channel_id_str, workspace_id
-        )
+        channel_id = await _resolve_channel_id(session, channel_id_str, workspace_id)
         if not channel_id:
             return
 
@@ -319,9 +303,9 @@ async def ingest_file_metadata(
 
         # Count total shares across channels
         shares = file_info.get("shares", {})
-        shares_count = sum(
-            len(v) for v in shares.get("public", {}).values()
-        ) + sum(len(v) for v in shares.get("private", {}).values())
+        shares_count = sum(len(v) for v in shares.get("public", {}).values()) + sum(
+            len(v) for v in shares.get("private", {}).values()
+        )
 
         stmt = pg_insert(FileMetadata).values(
             workspace_id=workspace_id,
@@ -440,9 +424,7 @@ async def _upsert_channel(session, channel_data: dict, workspace_id) -> bool:
     return is_new
 
 
-async def update_channel(
-    slack_channel_id: str, updates: dict
-) -> None:
+async def update_channel(slack_channel_id: str, updates: dict) -> None:
     """Update specific fields of a channel by its Slack ID."""
     async with AsyncSessionLocal() as session:
         workspace_id = await _get_workspace_id(session)
@@ -486,19 +468,13 @@ async def ingest_user(user_data: dict) -> bool:
                 or profile.get("real_name")
                 or user_data.get("name", "Unknown")
             ),
-            "real_name": (
-                user_data.get("real_name")
-                or profile.get("real_name", "")
-            ),
+            "real_name": (user_data.get("real_name") or profile.get("real_name", "")),
             "email": profile.get("email"),
             "is_bot": user_data.get("is_bot", False),
             "is_admin": user_data.get("is_admin", False),
             "is_owner": user_data.get("is_owner", False),
             "is_active": not user_data.get("deleted", False),
-            "avatar_url": (
-                profile.get("image_192")
-                or profile.get("image_72")
-            ),
+            "avatar_url": (profile.get("image_192") or profile.get("image_72")),
             "timezone": user_data.get("tz"),
             "status_text": profile.get("status_text"),
             "title": profile.get("title"),

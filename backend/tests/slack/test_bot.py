@@ -11,7 +11,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-
 # ═════════════════════════════════════════════════════════════════
 # CREATE SLACK APP
 # ═════════════════════════════════════════════════════════════════
@@ -22,7 +21,9 @@ class TestCreateSlackApp:
 
     @patch("app.slack.bot.get_settings")
     @patch("app.slack.bot.AsyncApp")
-    def test_create_slack_app_success(self, mock_async_app_cls, mock_get_settings, mock_settings):
+    def test_create_slack_app_success(
+        self, mock_async_app_cls, mock_get_settings, mock_settings
+    ):
         """With valid credentials, should create and return an AsyncApp."""
         mock_get_settings.return_value = mock_settings
         mock_app_instance = MagicMock()
@@ -30,6 +31,7 @@ class TestCreateSlackApp:
 
         # Reset module-level state
         import app.slack.bot as bot_module
+
         bot_module.settings = mock_settings
         bot_module.slack_app = None
 
@@ -42,11 +44,14 @@ class TestCreateSlackApp:
         )
 
     @patch("app.slack.bot.get_settings")
-    def test_create_slack_app_no_credentials(self, mock_get_settings, mock_settings_no_slack):
+    def test_create_slack_app_no_credentials(
+        self, mock_get_settings, mock_settings_no_slack
+    ):
         """Without credentials, should return None and log a warning."""
         mock_get_settings.return_value = mock_settings_no_slack
 
         import app.slack.bot as bot_module
+
         bot_module.settings = mock_settings_no_slack
         bot_module.slack_app = None
 

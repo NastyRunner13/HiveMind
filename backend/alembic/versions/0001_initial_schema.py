@@ -14,9 +14,10 @@ Creates the five core tables for HiveMind's Slack integration:
 
 from typing import Sequence, Union
 
-from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
+
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "0001"
@@ -28,12 +29,17 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     # ── Enums ────────────────────────────────────────────────────
     channel_type_enum = postgresql.ENUM(
-        "public", "private", "dm", "group_dm",
+        "public",
+        "private",
+        "dm",
+        "group_dm",
         name="channel_type_enum",
         create_type=True,
     )
     message_type_enum = postgresql.ENUM(
-        "user_message", "bot_message", "system",
+        "user_message",
+        "bot_message",
+        "system",
         name="message_type_enum",
         create_type=True,
     )
@@ -233,9 +239,7 @@ def upgrade() -> None:
         sa.Column("slack_file_id", sa.String(32), nullable=False),
         sa.Column("filename", sa.String(512), nullable=False),
         sa.Column("title", sa.String(512), nullable=True),
-        sa.Column(
-            "filetype", sa.String(64), nullable=False, server_default="unknown"
-        ),
+        sa.Column("filetype", sa.String(64), nullable=False, server_default="unknown"),
         sa.Column(
             "mimetype",
             sa.String(255),

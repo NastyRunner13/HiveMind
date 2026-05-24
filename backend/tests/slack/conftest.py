@@ -5,12 +5,9 @@ Provides mocked Slack clients, settings, database sessions, and
 sample event payloads so unit tests never hit real APIs or databases.
 """
 
-import uuid
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
 
 # ═════════════════════════════════════════════════════════════════
 # SETTINGS FIXTURES

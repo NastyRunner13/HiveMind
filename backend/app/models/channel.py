@@ -67,13 +67,9 @@ class Channel(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     topic: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     purpose: Mapped[str | None] = mapped_column(String(2048), nullable=True)
 
-    is_archived: Mapped[bool] = mapped_column(
-        Boolean, default=False, nullable=False
-    )
+    is_archived: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
-    member_count: Mapped[int] = mapped_column(
-        Integer, default=0, nullable=False
-    )
+    member_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     # When we last synced message history for this channel
     last_synced_at: Mapped[datetime | None] = mapped_column(
@@ -85,9 +81,7 @@ class Channel(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     messages = relationship(
         "Message", back_populates="channel", cascade="all, delete-orphan"
     )
-    files = relationship(
-        "FileMetadata", back_populates="channel"
-    )
+    files = relationship("FileMetadata", back_populates="channel")
 
     # ── Constraints ──────────────────────────────────────────────
     __table_args__ = (
@@ -99,6 +93,4 @@ class Channel(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
 
     def __repr__(self) -> str:
-        return (
-            f"<Channel name={self.name!r} type={self.channel_type.value!r}>"
-        )
+        return f"<Channel name={self.name!r} type={self.channel_type.value!r}>"

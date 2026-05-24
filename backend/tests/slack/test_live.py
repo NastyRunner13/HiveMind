@@ -20,7 +20,6 @@ Prerequisites:
 
 import os
 import sys
-import time
 from datetime import datetime, timezone
 
 import pytest
@@ -101,9 +100,7 @@ async def test_02_list_channels(slack_client):
         limit=100,
     )
 
-    assert result["ok"] is True, (
-        f"conversations.list failed: {result.get('error')}"
-    )
+    assert result["ok"] is True, f"conversations.list failed: {result.get('error')}"
 
     channels = result.get("channels", [])
     assert len(channels) > 0, "No channels found -- is the bot in any channels?"
@@ -115,8 +112,10 @@ async def test_02_list_channels(slack_client):
         archived = " [ARCHIVED]" if ch.get("is_archived") else ""
         private = " [PRIVATE]" if ch.get("is_private") else ""
         members = ch.get("num_members", "?")
-        print(f"  #{ch['name']:<30} (ID: {ch['id']}) "
-              f"members: {members}{private}{archived}")
+        print(
+            f"  #{ch['name']:<30} (ID: {ch['id']}) "
+            f"members: {members}{private}{archived}"
+        )
     print("=" * 60)
 
 
@@ -146,8 +145,7 @@ async def test_03_find_test_channel(slack_client):
     )
 
     assert test_channel is not None, (
-        f"Channel #{TEST_CHANNEL_NAME} not found! "
-        f"Please create it and invite the bot."
+        f"Channel #{TEST_CHANNEL_NAME} not found! Please create it and invite the bot."
     )
 
     _test_channel_id = test_channel["id"]
@@ -202,16 +200,14 @@ async def test_04_read_channel_history(slack_client):
             text = text.encode("ascii", errors="replace").decode("ascii")
             ts = msg.get("ts", "0")
             dt = datetime.fromtimestamp(float(ts), tz=timezone.utc)
-            print(f"  [{i}] {dt.strftime('%Y-%m-%d %H:%M:%S')} "
-                  f"| {user} | {text}")
+            print(f"  [{i}] {dt.strftime('%Y-%m-%d %H:%M:%S')} | {user} | {text}")
     else:
         print("  [WARN] No messages found. Post a message in the channel!")
 
     print("=" * 60)
 
     assert len(messages) > 0, (
-        f"No messages in #{TEST_CHANNEL_NAME}. "
-        f"Please post at least one message."
+        f"No messages in #{TEST_CHANNEL_NAME}. Please post at least one message."
     )
 
 
@@ -292,17 +288,14 @@ async def test_06_list_users(slack_client):
     """
     result = await slack_client.users_list(limit=100)
 
-    assert result["ok"] is True, (
-        f"users.list failed: {result.get('error')}"
-    )
+    assert result["ok"] is True, f"users.list failed: {result.get('error')}"
 
     members = result.get("members", [])
     assert len(members) > 0, "No users found in workspace"
 
     # Filter out slackbot and deactivated
     real_users = [
-        m for m in members
-        if m.get("id") != "USLACKBOT" and not m.get("deleted")
+        m for m in members if m.get("id") != "USLACKBOT" and not m.get("deleted")
     ]
 
     print("\n" + "=" * 60)
@@ -318,8 +311,7 @@ async def test_06_list_users(slack_client):
         is_bot = " [BOT]" if u.get("is_bot") else ""
         is_admin = " [ADMIN]" if u.get("is_admin") else ""
         email = profile.get("email", "")
-        print(f"  {name:<25} (ID: {u['id']}){is_bot}{is_admin}"
-              f"  {email}")
+        print(f"  {name:<25} (ID: {u['id']}){is_bot}{is_admin}  {email}")
     print("=" * 60)
 
 
@@ -364,4 +356,5 @@ async def test_07_bot_info(slack_client):
 async def _async_sleep(seconds: float):
     """Async-compatible sleep."""
     import asyncio
+
     await asyncio.sleep(seconds)

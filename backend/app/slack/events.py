@@ -149,9 +149,7 @@ def register_event_handlers(app: AsyncApp) -> None:
             )
             logger.info(f"Channel unarchived: {event.get('channel')}")
         except Exception as e:
-            logger.error(
-                f"Failed to unarchive channel: {e}", exc_info=True
-            )
+            logger.error(f"Failed to unarchive channel: {e}", exc_info=True)
 
     # ─────────────────────────────────────────────────────────────
     # USER EVENTS
@@ -165,9 +163,7 @@ def register_event_handlers(app: AsyncApp) -> None:
         user_data = event.get("user", {})
         try:
             await ingest_user(user_data)
-            logger.info(
-                f"New user indexed: {user_data.get('real_name', 'unknown')}"
-            )
+            logger.info(f"New user indexed: {user_data.get('real_name', 'unknown')}")
         except Exception as e:
             logger.error(f"Failed to index new user: {e}", exc_info=True)
 
@@ -175,13 +171,11 @@ def register_event_handlers(app: AsyncApp) -> None:
     async def handle_member_joined(event: dict) -> None:
         """
         Log when a user joins a channel — important for future RBAC.
-        
+
         For now, we just log it. Later, this will update channel
         membership records used for ACL-scoped vector search.
         """
-        logger.info(
-            f"User {event.get('user')} joined channel {event.get('channel')}"
-        )
+        logger.info(f"User {event.get('user')} joined channel {event.get('channel')}")
 
     # ─────────────────────────────────────────────────────────────
     # BOT MENTION

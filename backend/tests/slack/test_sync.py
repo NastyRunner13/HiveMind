@@ -14,7 +14,6 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-
 # ═════════════════════════════════════════════════════════════════
 # SYNC CHANNELS
 # ═════════════════════════════════════════════════════════════════
@@ -30,6 +29,7 @@ class TestSyncChannels:
         mock_ingest.return_value = True  # All are new
 
         from app.slack.sync import sync_channels
+
         stats = await sync_channels(mock_slack_client)
 
         assert stats["synced"] == 2  # general + hivemind-test
@@ -44,6 +44,7 @@ class TestSyncChannels:
         mock_ingest.side_effect = [True, False]
 
         from app.slack.sync import sync_channels
+
         stats = await sync_channels(mock_slack_client)
 
         assert stats["synced"] == 2
@@ -71,6 +72,7 @@ class TestSyncChannels:
         ]
 
         from app.slack.sync import sync_channels
+
         stats = await sync_channels(mock_slack_client)
 
         assert stats["synced"] == 2
@@ -86,6 +88,7 @@ class TestSyncChannels:
         }
 
         from app.slack.sync import sync_channels
+
         stats = await sync_channels(mock_slack_client)
 
         assert stats["synced"] == 0
@@ -98,6 +101,7 @@ class TestSyncChannels:
         mock_ingest.side_effect = [Exception("DB error"), True]
 
         from app.slack.sync import sync_channels
+
         stats = await sync_channels(mock_slack_client)
 
         # One failed, one succeeded
@@ -120,6 +124,7 @@ class TestSyncUsers:
         mock_ingest.return_value = True
 
         from app.slack.sync import sync_users
+
         stats = await sync_users(mock_slack_client)
 
         # 2 members in fixture, but USLACKBOT is skipped
@@ -134,6 +139,7 @@ class TestSyncUsers:
         mock_ingest.return_value = True
 
         from app.slack.sync import sync_users
+
         await sync_users(mock_slack_client)
 
         # Verify the USLACKBOT user was never passed to ingest_user
@@ -151,6 +157,7 @@ class TestSyncUsers:
         }
 
         from app.slack.sync import sync_users
+
         stats = await sync_users(mock_slack_client)
 
         assert stats["synced"] == 0
@@ -169,9 +176,8 @@ class TestSyncChannelHistory:
     async def test_sync_history_basic(self, mock_ingest, mock_slack_client):
         """Should ingest all messages from conversations.history."""
         from app.slack.sync import sync_channel_history
-        stats = await sync_channel_history(
-            mock_slack_client, "C_HIVEMIND_TEST"
-        )
+
+        stats = await sync_channel_history(mock_slack_client, "C_HIVEMIND_TEST")
 
         assert stats["fetched"] == 2
         assert stats["ingested"] == 2
@@ -185,9 +191,8 @@ class TestSyncChannelHistory:
         oldest = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
         from app.slack.sync import sync_channel_history
-        await sync_channel_history(
-            mock_slack_client, "C_HIVEMIND_TEST", oldest=oldest
-        )
+
+        await sync_channel_history(mock_slack_client, "C_HIVEMIND_TEST", oldest=oldest)
 
         call_kwargs = mock_slack_client.conversations_history.call_args.kwargs
         assert "oldest" in call_kwargs
@@ -203,16 +208,14 @@ class TestSyncChannelHistory:
         mock_slack_client.conversations_history.return_value = {
             "ok": True,
             "messages": [
-                {"ts": f"17165000{i:02d}.000000", "text": f"msg {i}"}
-                for i in range(3)
+                {"ts": f"17165000{i:02d}.000000", "text": f"msg {i}"} for i in range(3)
             ],
             "response_metadata": {"next_cursor": ""},
         }
 
         from app.slack.sync import sync_channel_history
-        stats = await sync_channel_history(
-            mock_slack_client, "C_TEST", limit=3
-        )
+
+        stats = await sync_channel_history(mock_slack_client, "C_TEST", limit=3)
 
         assert stats["fetched"] == 3
         assert stats["ingested"] == 3
@@ -230,6 +233,7 @@ class TestSyncChannelHistory:
         }
 
         from app.slack.sync import sync_channel_history
+
         stats = await sync_channel_history(mock_slack_client, "C_INVALID")
 
         assert stats["fetched"] == 0
@@ -242,9 +246,8 @@ class TestSyncChannelHistory:
         mock_ingest.side_effect = [Exception("parse error"), None]
 
         from app.slack.sync import sync_channel_history
-        stats = await sync_channel_history(
-            mock_slack_client, "C_HIVEMIND_TEST"
-        )
+
+        stats = await sync_channel_history(mock_slack_client, "C_HIVEMIND_TEST")
 
         assert stats["fetched"] == 2
         assert stats["ingested"] == 1
@@ -264,6 +267,7 @@ class TestSyncWorkspaceFiles:
     async def test_sync_files_basic(self, mock_ingest, mock_slack_client):
         """Should ingest file metadata for each file."""
         from app.slack.sync import sync_workspace_files
+
         stats = await sync_workspace_files(mock_slack_client)
 
         assert stats["fetched"] == 1
@@ -280,6 +284,7 @@ class TestSyncWorkspaceFiles:
         }
 
         from app.slack.sync import sync_workspace_files
+
         stats = await sync_workspace_files(mock_slack_client)
 
         assert stats["fetched"] == 0

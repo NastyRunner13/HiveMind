@@ -45,8 +45,7 @@ async def lifespan(app: FastAPI):
       2. Close database connections
     """
     logger.info(
-        f"🐝 Starting {settings.app_name} v{settings.app_version} "
-        f"({settings.app_env})"
+        f"🐝 Starting {settings.app_name} v{settings.app_version} ({settings.app_env})"
     )
 
     # ── Startup ──────────────────────────────────────────────────
@@ -56,16 +55,11 @@ async def lifespan(app: FastAPI):
 
     try:
         async with engine.connect() as conn:
-            await conn.execute(
-                __import__("sqlalchemy").text("SELECT 1")
-            )
+            await conn.execute(__import__("sqlalchemy").text("SELECT 1"))
         logger.info("✅ Database connected")
     except Exception as e:
         logger.error(f"❌ Database connection failed: {e}")
-        logger.error(
-            "Make sure PostgreSQL is running. "
-            "Try: docker-compose up -d db"
-        )
+        logger.error("Make sure PostgreSQL is running. Try: docker-compose up -d db")
 
     # Initialize Slack bot
     from app.slack.bot import create_slack_app, start_slack_bot
@@ -74,14 +68,10 @@ async def lifespan(app: FastAPI):
     if slack_app:
         await start_slack_bot()
     else:
-        logger.warning(
-            "⚠️  Slack bot not started — configure credentials in .env"
-        )
+        logger.warning("⚠️  Slack bot not started — configure credentials in .env")
 
     logger.info(f"🚀 {settings.app_name} is ready!")
-    logger.info(
-        f"   API docs: http://localhost:8000/docs"
-    )
+    logger.info("   API docs: http://localhost:8000/docs")
 
     yield  # ← App is running here
 
@@ -124,8 +114,8 @@ app.add_middleware(
 )
 
 # ── Register Routes ──────────────────────────────────────────────
-from app.api.health import router as health_router
-from app.api.router import api_router
+from app.api.health import router as health_router  # noqa: E402
+from app.api.router import api_router  # noqa: E402
 
 # Health check at root level
 app.include_router(health_router)
