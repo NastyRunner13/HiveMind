@@ -23,8 +23,11 @@ class TestSyncChannels:
     """Tests for sync_channels()."""
 
     @pytest.mark.asyncio
+    @patch("app.slack.sync._ensure_workspace", new_callable=AsyncMock)
     @patch("app.slack.sync.ingest_channel_from_api", new_callable=AsyncMock)
-    async def test_sync_channels_basic(self, mock_ingest, mock_slack_client):
+    async def test_sync_channels_basic(
+        self, mock_ingest, mock_ensure_ws, mock_slack_client
+    ):
         """Should call ingest_channel_from_api for each channel."""
         mock_ingest.return_value = True  # All are new
 
@@ -35,10 +38,14 @@ class TestSyncChannels:
         assert stats["synced"] == 2  # general + hivemind-test
         assert stats["new"] == 2
         assert mock_ingest.call_count == 2
+        mock_ensure_ws.assert_called_once_with(mock_slack_client)
 
     @pytest.mark.asyncio
+    @patch("app.slack.sync._ensure_workspace", new_callable=AsyncMock)
     @patch("app.slack.sync.ingest_channel_from_api", new_callable=AsyncMock)
-    async def test_sync_channels_with_updates(self, mock_ingest, mock_slack_client):
+    async def test_sync_channels_with_updates(
+        self, mock_ingest, mock_ensure_ws, mock_slack_client
+    ):
         """Should track new vs updated channels."""
         # First call: new, second call: existing
         mock_ingest.side_effect = [True, False]
@@ -52,8 +59,11 @@ class TestSyncChannels:
         assert stats["updated"] == 1
 
     @pytest.mark.asyncio
+    @patch("app.slack.sync._ensure_workspace", new_callable=AsyncMock)
     @patch("app.slack.sync.ingest_channel_from_api", new_callable=AsyncMock)
-    async def test_sync_channels_pagination(self, mock_ingest, mock_slack_client):
+    async def test_sync_channels_pagination(
+        self, mock_ingest, mock_ensure_ws, mock_slack_client
+    ):
         """Should handle paginated responses."""
         mock_ingest.return_value = True
 
@@ -79,8 +89,11 @@ class TestSyncChannels:
         assert mock_slack_client.conversations_list.call_count == 2
 
     @pytest.mark.asyncio
+    @patch("app.slack.sync._ensure_workspace", new_callable=AsyncMock)
     @patch("app.slack.sync.ingest_channel_from_api", new_callable=AsyncMock)
-    async def test_sync_channels_api_error(self, mock_ingest, mock_slack_client):
+    async def test_sync_channels_api_error(
+        self, mock_ingest, mock_ensure_ws, mock_slack_client
+    ):
         """Should stop gracefully on API error."""
         mock_slack_client.conversations_list.return_value = {
             "ok": False,
@@ -95,8 +108,11 @@ class TestSyncChannels:
         mock_ingest.assert_not_called()
 
     @pytest.mark.asyncio
+    @patch("app.slack.sync._ensure_workspace", new_callable=AsyncMock)
     @patch("app.slack.sync.ingest_channel_from_api", new_callable=AsyncMock)
-    async def test_sync_channels_ingestion_error(self, mock_ingest, mock_slack_client):
+    async def test_sync_channels_ingestion_error(
+        self, mock_ingest, mock_ensure_ws, mock_slack_client
+    ):
         """If one channel fails to ingest, others should still succeed."""
         mock_ingest.side_effect = [Exception("DB error"), True]
 
