@@ -11,12 +11,12 @@ Slack's rate limits (built into the slack-sdk client).
 """
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 
 from slack_sdk.web.async_client import AsyncWebClient
 
-from app.database import AsyncSessionLocal
 from app.services.ingestion import (
+    get_or_create_workspace,
     ingest_channel_from_api,
     ingest_file_metadata,
     ingest_message_from_history,
@@ -26,6 +26,24 @@ from app.services.ingestion import (
 logger = logging.getLogger(__name__)
 
 
+async def _ensure_workspace(client: AsyncWebClient) -> None:
+    """
+    Ensure a workspace record exists in the database.
+
+    Calls auth.test to get the team ID and name, then upserts
+    the workspace. This MUST be called before any sync operation
+    so that channels/users have a workspace_id to reference.
+    """
+    auth = await client.auth_test()
+    team_id = auth.get("team_id", "")
+    team_name = auth.get("team", "Unknown")
+    team_url = auth.get("url", "")
+    # Extract domain from team URL (e.g., "https://myteam.slack.com/" -> "myteam")
+    domain = team_url.replace("https://", "").replace(".slack.com/", "")
+    await get_or_create_workspace(slack_team_id=team_id, name=team_name, domain=domain)
+    logger.info(f"Workspace ensured: {team_name} ({team_id})")
+
+
 async def sync_channels(client: AsyncWebClient) -> dict:
     """
     Fetch all channels the bot is a member of and sync to database.
@@ -33,6 +51,10 @@ async def sync_channels(client: AsyncWebClient) -> dict:
     Returns a summary dict: {synced: int, new: int, updated: int}
     """
     logger.info("Starting channel sync...")
+
+    # Ensure workspace exists before syncing channels
+    await _ensure_workspace(client)
+
     stats = {"synced": 0, "new": 0, "updated": 0}
     cursor = None
 
@@ -233,22 +255,14 @@ async def sync_workspace_files(
             try:
                 # Determine the primary channel (first share channel)
                 channels = list(
-                    file_info.get("shares", {})
-                    .get("public", {})
-                    .keys()
-                ) or list(
-                    file_info.get("shares", {})
-                    .get("private", {})
-                    .keys()
-                )
+                    file_info.get("shares", {}).get("public", {}).keys()
+                ) or list(file_info.get("shares", {}).get("private", {}).keys())
                 channel_id = channels[0] if channels else None
                 await ingest_file_metadata(file_info, channel_id)
                 stats["ingested"] += 1
             except Exception as e:
                 stats["errors"] += 1
-                logger.error(
-                    f"Failed to ingest file metadata: {e}", exc_info=True
-                )
+                logger.error(f"Failed to ingest file metadata: {e}", exc_info=True)
 
         paging = result.get("paging", {})
         if page >= paging.get("pages", 1):

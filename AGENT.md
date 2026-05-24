@@ -42,7 +42,16 @@ HiveMind/
 │   │   ├── config.py         # Settings via pydantic-settings
 │   │   ├── database.py       # Async SQLAlchemy engine + session factory
 │   │   └── main.py           # FastAPI app with lifespan management
+│   ├── tests/                # Test suite (modular, per-integration)
+│   │   ├── conftest.py       # Root-level shared fixtures
+│   │   └── slack/            # Slack integration tests
+│   │       ├── conftest.py   # Slack-specific fixtures & sample events
+│   │       ├── test_bot.py   # Bot lifecycle tests (9 tests)
+│   │       ├── test_events.py# Event handler tests (17 tests)
+│   │       ├── test_sync.py  # Sync utility tests (16 tests)
+│   │       └── test_live.py  # Live Slack API integration tests (7 tests)
 │   ├── alembic/              # Database migration scripts
+│   ├── pytest.ini            # Pytest configuration (asyncio auto mode)
 │   ├── requirements.txt
 │   └── .env.example
 ├── docker-compose.yml        # PostgreSQL dev infrastructure
@@ -111,6 +120,16 @@ HiveMind handles sensitive team data. These rules are non-negotiable:
 - Socket Mode is used for local development (no public URL needed)
 - The bot's lifecycle is managed via FastAPI's `lifespan` context
 
+### 7. Testing
+
+- Tests are organized modularly under `backend/tests/` with **subpackages per integration** (e.g., `tests/slack/`)
+- Each subpackage has its own `conftest.py` for integration-specific fixtures
+- **Unit tests** use `unittest.mock` with `AsyncMock` for mocked Slack API responses — no credentials needed
+- **Live integration tests** hit the real Slack API using credentials from `.env` — run separately with `-s` for output
+- Use `pytest-asyncio` with `asyncio_mode = auto` (configured in `pytest.ini`)
+- Test filenames: drop the integration prefix (e.g., `test_bot.py` not `test_slack_bot.py`) since the subfolder provides context
+- When adding a new integration, create `tests/<integration>/` with its own `conftest.py`
+
 ---
 
 ## Naming Conventions
@@ -149,6 +168,14 @@ HiveMind handles sensitive team data. These rules are non-negotiable:
 2. Register it with the Slack app in the `register_events()` function
 3. Create/update the ingestion service in `backend/app/services/ingestion.py`
 
+### Adding Tests for an Integration
+
+1. Create a test subpackage: `backend/tests/<integration>/`
+2. Add `__init__.py` and `conftest.py` with integration-specific fixtures
+3. Write unit tests with mocked API responses (no real credentials needed)
+4. Write live integration tests (skipped automatically if credentials are missing)
+5. Run: `python -m pytest tests/<integration>/ -v`
+
 ### Adding a New Integration (Phase 1)
 
 1. Create a new module: `backend/app/integrations/<platform>/`
@@ -174,6 +201,8 @@ HiveMind handles sensitive team data. These rules are non-negotiable:
 | `pydantic-settings` | Configuration management |
 | `python-dotenv` | `.env` file loader |
 | `httpx` | Async HTTP client |
+| `pytest` | Test framework |
+| `pytest-asyncio` | Async test support |
 
 ### Planned (Not Yet Installed)
 
@@ -213,6 +242,9 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for full details. Quick reference:
 | Ingestion service | ✅ Complete | `app/services/ingestion.py` |
 | API: health, channels, messages | ✅ Complete | `app/api/` |
 | Docker Compose (PostgreSQL) | ✅ Complete | `docker-compose.yml` |
+| **Slack unit tests** (42 tests) | ✅ Complete | `tests/slack/test_bot.py`, `test_events.py`, `test_sync.py` |
+| **Slack live integration tests** (7 tests) | ✅ Complete | `tests/slack/test_live.py` — verified against real workspace |
+| **Slack API connectivity** | ✅ Verified | Bot token, read/write messages, list channels/users all working |
 
 ---
 
@@ -226,6 +258,34 @@ Based on the Phase 1 roadmap priority:
 4. **RBAC** — role model, OBO token exchange, ACL-scoped vector search
 5. **Task Management** — Planner/Jira integration
 6. **Proactive Nudges** — scheduled behaviors and triggers
+
+---
+
+## Running Tests
+
+```bash
+# From backend/ directory with venv activated:
+
+# Run ALL unit tests (no Slack credentials needed)
+python -m pytest tests/slack/test_bot.py tests/slack/test_events.py tests/slack/test_sync.py -v
+
+# Run Slack live integration tests (requires .env with valid SLACK_BOT_TOKEN)
+python -m pytest tests/slack/test_live.py -v -s
+
+# Run everything
+python -m pytest -v -s
+
+# Run only unit tests (skip live tests)
+python -m pytest tests/ -v --ignore=tests/slack/test_live.py
+```
+
+### Slack Test Setup (for live tests)
+
+1. Ensure `.env` has valid `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `SLACK_APP_TOKEN`
+2. Create a `#hivemind-test` channel in your Slack workspace
+3. Invite the bot (`@HiveMind`) to the channel
+4. Post at least one message in the channel
+5. Live tests will post a timestamped test message and read it back
 
 ---
 

@@ -69,9 +69,7 @@ class Message(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
 
     # Parent thread timestamp — if set, this message is a reply
-    thread_ts: Mapped[str | None] = mapped_column(
-        String(64), nullable=True, index=True
-    )
+    thread_ts: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
 
     # ── Content ──────────────────────────────────────────────────
     content: Mapped[str] = mapped_column(Text, nullable=False, default="")
@@ -86,18 +84,10 @@ class Message(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     has_attachments: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False
     )
-    has_files: Mapped[bool] = mapped_column(
-        Boolean, default=False, nullable=False
-    )
-    reaction_count: Mapped[int] = mapped_column(
-        Integer, default=0, nullable=False
-    )
-    reply_count: Mapped[int] = mapped_column(
-        Integer, default=0, nullable=False
-    )
-    is_edited: Mapped[bool] = mapped_column(
-        Boolean, default=False, nullable=False
-    )
+    has_files: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    reaction_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    reply_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    is_edited: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     # When the message was sent in Slack (not when HiveMind ingested it)
     slack_sent_at: Mapped[datetime] = mapped_column(
@@ -123,10 +113,7 @@ class Message(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     @property
     def is_thread_reply(self) -> bool:
         """Check if this message is a reply in a thread."""
-        return (
-            self.thread_ts is not None
-            and self.thread_ts != self.slack_message_ts
-        )
+        return self.thread_ts is not None and self.thread_ts != self.slack_message_ts
 
     def __repr__(self) -> str:
         preview = self.content[:50] + "..." if len(self.content) > 50 else self.content

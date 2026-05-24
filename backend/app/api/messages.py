@@ -7,11 +7,11 @@ Provides:
 - GET /api/v1/files — list indexed file metadata
 """
 
-import uuid
 import logging
+import uuid
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -20,7 +20,6 @@ from app.config import get_settings
 from app.database import get_db
 from app.models.file_metadata import FileMetadata
 from app.models.message import Message
-from app.models.user import SlackUser
 from app.schemas.file_metadata import FileListResponse, FileMetadataResponse
 from app.schemas.message import (
     MessageListResponse,
@@ -47,9 +46,7 @@ async def list_channel_messages(
     until: datetime | None = Query(
         None, description="Only messages before this timestamp"
     ),
-    threads_only: bool = Query(
-        False, description="Only show thread-starting messages"
-    ),
+    threads_only: bool = Query(False, description="Only show thread-starting messages"),
     db: AsyncSession = Depends(get_db),
 ) -> MessageListResponse:
     """
@@ -66,9 +63,7 @@ async def list_channel_messages(
         .where(Message.channel_id == channel_id)
         .options(selectinload(Message.sender))
     )
-    count_query = select(func.count(Message.id)).where(
-        Message.channel_id == channel_id
-    )
+    count_query = select(func.count(Message.id)).where(Message.channel_id == channel_id)
 
     if since:
         query = query.where(Message.slack_sent_at >= since)
@@ -99,11 +94,7 @@ async def list_channel_messages(
 
     # Apply pagination — newest first
     offset = (page - 1) * page_size
-    query = (
-        query.order_by(Message.slack_sent_at.desc())
-        .offset(offset)
-        .limit(page_size)
-    )
+    query = query.order_by(Message.slack_sent_at.desc()).offset(offset).limit(page_size)
 
     result = await db.execute(query)
     messages = list(result.scalars().all())
@@ -152,11 +143,7 @@ async def search_messages(
     total = total_result.scalar()
 
     offset = (page - 1) * page_size
-    query = (
-        query.order_by(Message.slack_sent_at.desc())
-        .offset(offset)
-        .limit(page_size)
-    )
+    query = query.order_by(Message.slack_sent_at.desc()).offset(offset).limit(page_size)
 
     result = await db.execute(query)
     messages = list(result.scalars().all())
@@ -174,9 +161,7 @@ async def search_messages(
 async def list_files(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
-    channel_id: uuid.UUID | None = Query(
-        None, description="Filter by channel"
-    ),
+    channel_id: uuid.UUID | None = Query(None, description="Filter by channel"),
     filetype: str | None = Query(
         None, description="Filter by file type (e.g., 'pdf', 'png')"
     ),
@@ -191,9 +176,7 @@ async def list_files(
     Note: This returns metadata only — file content is never stored.
     Files can be filtered by channel, type, or sharing user.
     """
-    query = select(FileMetadata).options(
-        selectinload(FileMetadata.shared_by)
-    )
+    query = select(FileMetadata).options(selectinload(FileMetadata.shared_by))
     count_query = select(func.count(FileMetadata.id))
 
     if channel_id:
@@ -206,18 +189,14 @@ async def list_files(
 
     if shared_by:
         query = query.where(FileMetadata.shared_by_id == shared_by)
-        count_query = count_query.where(
-            FileMetadata.shared_by_id == shared_by
-        )
+        count_query = count_query.where(FileMetadata.shared_by_id == shared_by)
 
     total_result = await db.execute(count_query)
     total = total_result.scalar()
 
     offset = (page - 1) * page_size
     query = (
-        query.order_by(FileMetadata.created_at.desc())
-        .offset(offset)
-        .limit(page_size)
+        query.order_by(FileMetadata.created_at.desc()).offset(offset).limit(page_size)
     )
 
     result = await db.execute(query)

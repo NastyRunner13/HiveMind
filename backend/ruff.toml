@@ -1,0 +1,21 @@
+# ============================================
+# Ruff Configuration — HiveMind Backend
+# ============================================
+# Matches CONTRIBUTING.md conventions: 88 char lines, Black-compatible.
+# Keep this in sync with CI (.github/workflows/ci.yml).
+
+line-length = 88
+target-version = "py312"
+
+[lint]
+# E = pycodestyle errors, F = pyflakes, I = isort, W = pycodestyle warnings
+select = ["E", "F", "I", "W"]
+# E501 is handled by the formatter, not the linter
+ignore = ["E501"]
+
+[lint.isort]
+known-first-party = ["app"]
+
+[format]
+quote-style = "double"
+indent-style = "space"

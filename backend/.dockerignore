@@ -1,0 +1,15 @@
+# Don't send these to Docker build context
+.venv/
+venv/
+__pycache__/
+*.pyc
+.env
+.env.local
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg-info/
+.git/
+.gitignore
+tests/
+check_db.py

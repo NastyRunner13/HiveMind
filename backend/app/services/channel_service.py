@@ -56,9 +56,7 @@ async def get_channel_by_id(
     session: AsyncSession, channel_id: uuid.UUID
 ) -> Channel | None:
     """Get a single channel by its internal UUID."""
-    result = await session.execute(
-        select(Channel).where(Channel.id == channel_id)
-    )
+    result = await session.execute(select(Channel).where(Channel.id == channel_id))
     return result.scalar_one_or_none()
 
 

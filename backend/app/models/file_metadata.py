@@ -52,16 +52,12 @@ class FileMetadata(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
 
     # ── Slack Identifiers ────────────────────────────────────────
-    slack_file_id: Mapped[str] = mapped_column(
-        String(32), nullable=False, index=True
-    )
+    slack_file_id: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
 
     # ── File Info ────────────────────────────────────────────────
     filename: Mapped[str] = mapped_column(String(512), nullable=False)
     title: Mapped[str | None] = mapped_column(String(512), nullable=True)
-    filetype: Mapped[str] = mapped_column(
-        String(64), nullable=False, default="unknown"
-    )
+    filetype: Mapped[str] = mapped_column(String(64), nullable=False, default="unknown")
     mimetype: Mapped[str] = mapped_column(
         String(255), nullable=False, default="application/octet-stream"
     )
@@ -69,21 +65,13 @@ class FileMetadata(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     # ── URLs ─────────────────────────────────────────────────────
     # Slack's private download URL (requires authentication)
-    url_private: Mapped[str | None] = mapped_column(
-        String(2048), nullable=True
-    )
+    url_private: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     # Slack permalink for linking back to the file
-    permalink: Mapped[str | None] = mapped_column(
-        String(2048), nullable=True
-    )
+    permalink: Mapped[str | None] = mapped_column(String(2048), nullable=True)
 
     # ── Sharing Info ─────────────────────────────────────────────
-    shares_count: Mapped[int] = mapped_column(
-        Integer, default=1, nullable=False
-    )
-    is_external: Mapped[bool] = mapped_column(
-        Boolean, default=False, nullable=False
-    )
+    shares_count: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    is_external: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     # When the file was created/uploaded in Slack
     slack_created_at: Mapped[datetime | None] = mapped_column(
