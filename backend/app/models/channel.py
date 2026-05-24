@@ -55,7 +55,11 @@ class Channel(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
 
     channel_type: Mapped[ChannelType] = mapped_column(
-        Enum(ChannelType, name="channel_type_enum"),
+        Enum(
+            ChannelType,
+            name="channel_type_enum",
+            values_callable=lambda x: [e.value for e in x],
+        ),
         nullable=False,
         default=ChannelType.PUBLIC,
     )
