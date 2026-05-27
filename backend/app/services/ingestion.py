@@ -18,6 +18,7 @@ from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.database import AsyncSessionLocal
+from app.events.bus import EventType, event_bus
 from app.models.channel import Channel, ChannelType
 from app.models.file_metadata import FileMetadata
 from app.models.message import Message, MessageType
@@ -100,6 +101,30 @@ async def _resolve_user_id(session, slack_user_id: str, workspace_id):
     return result.scalar_one_or_none()
 
 
+def _infer_channel_type(slack_channel_id: str) -> ChannelType:
+    """Infer channel type from Slack ID prefix as a safe default.
+
+    Slack channel IDs follow conventions:
+      C... = public channel (but can be private too in newer Slack)
+      G... = private channel or group DM
+      D... = direct message
+
+    We default to PRIVATE for safety — public ACL will be set
+    when the channel is properly synced from the Slack API.
+    The key security property: fail closed. A falsely-private
+    channel only denies access (fixed on next sync). A falsely-public
+    channel leaks data (never self-corrects for indexed chunks).
+    """
+    if slack_channel_id.startswith("D"):
+        return ChannelType.DM
+    elif slack_channel_id.startswith("G"):
+        return ChannelType.PRIVATE
+    else:
+        # Even for C-prefix, default to PRIVATE for safety.
+        # The sync job will correct this to PUBLIC if appropriate.
+        return ChannelType.PRIVATE
+
+
 # ═════════════════════════════════════════════════════════════════
 # MESSAGE INGESTION
 # ═════════════════════════════════════════════════════════════════
@@ -122,13 +147,23 @@ async def ingest_message(event: dict) -> None:
         channel_id = await _resolve_channel_id(session, slack_channel_id, workspace_id)
 
         if not channel_id:
-            # Channel not yet synced — auto-create a placeholder
-            logger.debug(f"Channel {slack_channel_id} not found, creating placeholder")
+            # Channel not yet synced — auto-create a placeholder.
+            # Default to PRIVATE as the safe option (fail closed).
+            # If the channel is actually public, the next sync will
+            # correct the type. PRIVATE ACL means content won't be
+            # globally searchable until the channel type is verified.
+            # The inverse (defaulting to PUBLIC) would leak private
+            # content permanently for already-indexed chunks.
+            inferred_type = _infer_channel_type(slack_channel_id)
+            logger.debug(
+                f"Channel {slack_channel_id} not found, creating "
+                f"placeholder as {inferred_type.value}"
+            )
             channel = Channel(
                 workspace_id=workspace_id,
                 slack_channel_id=slack_channel_id,
                 name=f"unknown-{slack_channel_id}",
-                channel_type=ChannelType.PUBLIC,
+                channel_type=inferred_type,
             )
             session.add(channel)
             await session.flush()
@@ -197,6 +232,15 @@ async def ingest_message(event: dict) -> None:
         await session.execute(stmt)
         await session.commit()
 
+        # Publish event to bus for downstream processing (embeddings, etc.)
+        await event_bus.publish(EventType.MESSAGE_INGESTED, {
+            "slack_channel_id": slack_channel_id,
+            "slack_message_ts": slack_ts,
+            "sender_slack_id": event.get("user"),
+            "has_files": bool(event.get("files")),
+            "thread_ts": event.get("thread_ts"),
+        })
+
         logger.debug(f"Ingested message {slack_ts} in channel {slack_channel_id}")
 
 
@@ -258,6 +302,12 @@ async def handle_message_edit(event: dict) -> None:
             )
         )
         await session.commit()
+
+        await event_bus.publish(EventType.MESSAGE_EDITED, {
+            "slack_channel_id": channel_id_str,
+            "slack_message_ts": slack_ts,
+        })
+
         logger.debug(f"Updated edited message {slack_ts}")
 
 
@@ -334,6 +384,14 @@ async def ingest_file_metadata(
         )
         await session.execute(stmt)
         await session.commit()
+
+        await event_bus.publish(EventType.FILE_SHARED, {
+            "slack_file_id": file_info.get("id"),
+            "filename": file_info.get("name"),
+            "filetype": file_info.get("filetype"),
+            "slack_channel_id": slack_channel_id,
+            "shared_by": file_info.get("user"),
+        })
 
         logger.debug(
             f"Ingested file metadata: {file_info.get('name')} "
@@ -421,6 +479,13 @@ async def _upsert_channel(session, channel_data: dict, workspace_id) -> bool:
     await session.execute(stmt)
     await session.commit()
 
+    if is_new:
+        await event_bus.publish(EventType.CHANNEL_CREATED, {
+            "slack_channel_id": slack_id,
+            "name": channel_data.get("name"),
+            "channel_type": ch_type.value,
+        })
+
     return is_new
 
 
@@ -506,5 +571,12 @@ async def ingest_user(user_data: dict) -> bool:
         )
         await session.execute(stmt)
         await session.commit()
+
+        if is_new:
+            await event_bus.publish(EventType.USER_JOINED, {
+                "slack_user_id": slack_id,
+                "display_name": values["display_name"],
+                "is_bot": values["is_bot"],
+            })
 
         return is_new
