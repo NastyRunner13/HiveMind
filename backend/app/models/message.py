@@ -75,7 +75,11 @@ class Message(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     content: Mapped[str] = mapped_column(Text, nullable=False, default="")
 
     message_type: Mapped[MessageType] = mapped_column(
-        Enum(MessageType, name="message_type_enum"),
+        Enum(
+            MessageType,
+            name="message_type_enum",
+            values_callable=lambda e: [m.value for m in e],
+        ),
         nullable=False,
         default=MessageType.USER,
     )
