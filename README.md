@@ -169,45 +169,51 @@ HiveMind/
 │   ├── app/
 │   │   ├── agent/            # AI Agent (LangChain + LangGraph)
 │   │   │   ├── llm.py        # LLM factory (OpenAI/Google/Anthropic/Ollama)
-│   │   │   ├── tools.py      # LangChain tools wrapping HiveMind services
+│   │   │   ├── tools.py      # ACL-scoped tool factory with closure injection
 │   │   │   ├── prompts.py    # System prompts & safety instructions
-│   │   │   └── graph.py      # LangGraph ReAct agent workflow
-│   │   ├── api/              # FastAPI route handlers
-│   │   │   ├── channels.py   # Channel CRUD endpoints
+│   │   │   └── graph.py      # LangGraph ReAct agent (per-request, user-scoped)
+│   │   ├── api/              # FastAPI route handlers (thin layer)
+│   │   │   ├── channels.py   # Channel CRUD with type filtering
 │   │   │   ├── health.py     # Health check endpoint
 │   │   │   ├── messages.py   # Message query endpoints
-│   │   │   ├── knowledge.py  # Semantic search endpoint
+│   │   │   ├── knowledge.py  # Semantic search (ACL via X-Slack-User-Id)
 │   │   │   ├── digests.py    # Digest generation & listing
 │   │   │   └── router.py     # API router aggregation
 │   │   ├── events/           # Redis Streams event bus
-│   │   │   └── bus.py        # EventBus with publish/subscribe
+│   │   │   ├── bus.py        # EventBus with publish/subscribe
+│   │   │   └── consumers.py  # Background consumers (knowledge indexing)
 │   │   ├── models/           # SQLAlchemy ORM models
-│   │   │   ├── base.py       # Base model with common fields
+│   │   │   ├── base.py       # Base model with UUID + timestamps
 │   │   │   ├── channel.py    # Slack channel model
 │   │   │   ├── file_metadata.py  # File metadata tracking
 │   │   │   ├── message.py    # Message storage model
 │   │   │   ├── user.py       # User model with roles
 │   │   │   ├── workspace.py  # Workspace/org model
 │   │   │   ├── embedding.py  # DocumentChunk with pgvector + ACL
-│   │   │   └── digest.py     # Generated channel summaries
+│   │   │   ├── digest.py     # Generated channel summaries
+│   │   │   └── membership.py # Channel membership for ACL enforcement
 │   │   ├── schemas/          # Pydantic request/response schemas
-│   │   ├── services/         # Business logic layer
-│   │   │   ├── ingestion.py  # Slack event → DB + event bus pipeline
+│   │   ├── services/         # Business logic (testable, no HTTP dependency)
+│   │   │   ├── ingestion.py  # Slack event → DB pipeline + event bus
 │   │   │   ├── embedding_service.py  # Text chunking + embedding
-│   │   │   ├── knowledge_service.py  # ACL-aware semantic search
-│   │   │   ├── agent_service.py      # Agent orchestrator
-│   │   │   ├── digest_service.py     # LLM-powered channel summaries
-│   │   │   └── scheduler.py          # APScheduler cron jobs
+│   │   │   ├── knowledge_service.py  # ACL-aware semantic search + idempotent indexing
+│   │   │   ├── membership_service.py # Channel membership management + ACL lookups
+│   │   │   ├── agent_service.py      # Agent orchestrator with per-tool audit logging
+│   │   │   ├── digest_service.py     # LLM-powered summaries (public + personalized)
+│   │   │   └── scheduler.py          # APScheduler cron jobs (digest + membership sync)
 │   │   ├── slack/            # Slack bot integration
 │   │   │   ├── bot.py        # Bot lifecycle management
-│   │   │   ├── events.py     # Slack event handlers (→ AI agent)
+│   │   │   ├── events.py     # Slack event handlers (→ AI agent routing)
 │   │   │   └── sync.py       # Historical data sync
-│   │   ├── config.py         # Pydantic settings management
-│   │   ├── database.py       # SQLAlchemy async engine setup
-│   │   └── main.py           # FastAPI app entry point
-│   ├── alembic/              # Database migrations
-│   ├── tests/                # Test suite (per-integration subpackages)
-│   │   └── slack/            # Slack unit + live tests (42 passing)
+│   │   ├── config.py         # Pydantic settings with startup validation
+│   │   ├── database.py       # Async SQLAlchemy engine + session factory
+│   │   └── main.py           # FastAPI app with full lifespan management
+│   ├── alembic/              # Database migrations (0001–0003)
+│   ├── tests/                # Test suite (174+ tests, per-integration subpackages)
+│   │   ├── agent/            # Agent, tool security, audit logging tests
+│   │   ├── events/           # Event bus + consumer tests
+│   │   ├── services/         # Service-layer tests (digest, knowledge, etc.)
+│   │   └── slack/            # Slack unit + live integration tests
 │   ├── alembic.ini           # Alembic configuration
 │   ├── requirements.txt      # Python dependencies
 │   └── .env.example          # Environment variable template
@@ -240,8 +246,14 @@ HiveMind/
 ### Running Tests
 
 ```bash
-# Run all unit tests (no credentials needed)
-python -m pytest tests/slack/test_bot.py tests/slack/test_events.py tests/slack/test_sync.py -v
+# Run ALL unit tests (174+ tests, no credentials needed)
+python -m pytest tests/ -v --ignore=tests/slack/test_live.py
+
+# Run by test suite
+python -m pytest tests/slack/ -v          # Slack bot, events, sync (44 tests)
+python -m pytest tests/agent/ -v           # Agent graph, tools, security, audit (22+ tests)
+python -m pytest tests/services/ -v        # Services: digest, knowledge, membership, etc. (40+ tests)
+python -m pytest tests/events/ -v           # Event bus + indexing consumer (10+ tests)
 
 # Run Slack live tests (requires .env with valid SLACK_BOT_TOKEN)
 python -m pytest tests/slack/test_live.py -v -s
@@ -267,7 +279,7 @@ alembic downgrade -1
 
 ## Roadmap
 
-### Phase 1 — Core Intelligence (Current)
+### Phase 1 — Core Intelligence
 
 #### Milestone 1 — Foundation ✅
 - [x] FastAPI backend with async PostgreSQL
@@ -278,19 +290,31 @@ alembic downgrade -1
 - [x] Alembic database migrations
 - [x] Docker Compose for local development
 - [x] CI/CD pipeline (lint, test, Docker build)
-- [x] Comprehensive test suite (42 unit tests + 7 live tests)
+- [x] Comprehensive Slack test suite (44 unit tests + 7 live tests)
 
-#### Milestone 2 — Core Intelligence 🔶 *(Code Complete, Under Review)*
+#### Milestone 2 — Core Intelligence ✅
 - [x] Redis Streams event bus (decoupled event pipeline)
 - [x] Knowledge Fabric (pgvector embeddings + ACL-aware semantic search)
-- [x] AI Agent (LangGraph ReAct agent with 4 tools)
+- [x] AI Agent (LangGraph ReAct agent with 5 ACL-scoped tools)
 - [x] Daily digest / channel summaries (LLM-powered + APScheduler)
 - [x] Knowledge & Digest REST APIs
 - [x] Provider-agnostic LLM factory (OpenAI, Google, Anthropic, Ollama)
-- [ ] Code review & integration testing with real LLM keys
-- [ ] Dedicated unit tests for new modules
+- [x] Embedding service with local sentence-transformers (384 dims)
+- [x] Semantic indexing consumer (Redis Streams → pgvector)
 
-#### Milestone 3 — Phase 1 Remaining
+#### Milestone 3 — Security & Indexing ✅ *(174 tests passing)*
+- [x] Server-derived ACL context (no client-supplied authority)
+- [x] ACL-scoped agent tools with closure-injected user context
+- [x] Channel membership model + denormalized O(1) ACL lookups
+- [x] Membership sync (real-time join/leave events + daily cron)
+- [x] Safe global digests (public channels only)
+- [x] Personalized on-demand digests (private + public channels)
+- [x] Per-tool audit logging with arg sanitization
+- [x] Embedding dimension startup safety validation
+- [x] Idempotent semantic indexing with re-index support
+- [x] Comprehensive test suites: agent security, audit, consumers, services
+
+#### Milestone 4 — Phase 1 Remaining *(Upcoming)*
 - [ ] RBAC with OBO token exchange
 - [ ] Task management integration (Planner/Jira)
 - [ ] Proactive behaviors (nudges, reminders)
