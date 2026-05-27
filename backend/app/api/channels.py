@@ -97,8 +97,35 @@ async def sync_channels_from_slack(
 
     # Sync channels and users
     try:
-        channel_stats = await sync_channels(slack_app.client)
+        # Users must be synced BEFORE channels and memberships.
+        # membership_service.sync_channel_members() silently skips
+        # any user not yet in slack_users (L241 in membership_service),
+        # so syncing channels first leaves memberships empty.
         user_stats = await sync_users(slack_app.client)
+        channel_stats = await sync_channels(slack_app.client)
+
+        # Now that both users and channels exist, sync memberships.
+        # Without this, ACL context is incomplete until the 3am
+        # daily cron safety-net runs full_sync_all_channels().
+        from sqlalchemy import select
+
+        from app.models.workspace import Workspace
+        from app.services.membership_service import membership_service
+
+        ws_result = await db.execute(
+            select(Workspace).where(Workspace.is_active.is_(True)).limit(1)
+        )
+        workspace = ws_result.scalar_one_or_none()
+        membership_msg = ""
+        if workspace:
+            membership_stats = await membership_service.full_sync_all_channels(
+                workspace_id=workspace.id,
+                slack_client=slack_app.client,
+            )
+            membership_msg = (
+                f" Synced memberships for "
+                f"{membership_stats['channels_synced']} channels."
+            )
 
         return ChannelSyncResponse(
             synced_count=channel_stats["synced"],
@@ -106,8 +133,8 @@ async def sync_channels_from_slack(
             updated_count=channel_stats["updated"],
             message=(
                 f"Synced {channel_stats['synced']} channels "
-                f"({channel_stats['new']} new, {channel_stats['updated']} updated). "
-                f"Also synced {user_stats['synced']} users."
+                f"({channel_stats['new']} new, {channel_stats['updated']} updated), "
+                f"{user_stats['synced']} users.{membership_msg}"
             ),
         )
     except Exception as e:

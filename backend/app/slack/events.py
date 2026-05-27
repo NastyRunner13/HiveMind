@@ -170,38 +170,112 @@ def register_event_handlers(app: AsyncApp) -> None:
     @app.event("member_joined_channel")
     async def handle_member_joined(event: dict) -> None:
         """
-        Log when a user joins a channel — important for future RBAC.
+        Handle a user joining a channel — persist membership for ACL.
 
-        For now, we just log it. Later, this will update channel
-        membership records used for ACL-scoped vector search.
+        This updates channel membership records used for ACL-scoped
+        vector search and agent tool authorization.
         """
-        logger.info(f"User {event.get('user')} joined channel {event.get('channel')}")
+        from app.services.membership_service import membership_service
+
+        try:
+            await membership_service.handle_member_joined(
+                slack_user_id=event.get("user"),
+                slack_channel_id=event.get("channel"),
+            )
+        except Exception as e:
+            logger.error(f"Failed to record membership join: {e}", exc_info=True)
+
+    @app.event("member_left_channel")
+    async def handle_member_left(event: dict) -> None:
+        """
+        Handle a user leaving a channel — deactivate membership for ACL.
+
+        Soft-deletes the membership record so the user can no longer
+        access content from this channel via agent tools or search.
+        """
+        from app.services.membership_service import membership_service
+
+        try:
+            await membership_service.handle_member_left(
+                slack_user_id=event.get("user"),
+                slack_channel_id=event.get("channel"),
+            )
+        except Exception as e:
+            logger.error(f"Failed to record membership leave: {e}", exc_info=True)
 
     # ─────────────────────────────────────────────────────────────
     # BOT MENTION
     # ─────────────────────────────────────────────────────────────
 
     @app.event("app_mention")
-    async def handle_app_mention(event: dict, say) -> None:
+    async def handle_app_mention(event: dict, say, client) -> None:
         """
-        Handle @HiveMind mentions — the main interaction point.
+        Handle @HiveMind mentions — parse commands or route through AI agent.
 
-        For now, responds with a simple acknowledgment.
-        Future: route to the AI agent for intent classification
-        and response generation.
+        Supported commands:
+        - @HiveMind digest          → generate digest for all channels
+        - @HiveMind digest #channel → generate digest for a specific channel
+        - @HiveMind help            → show available commands
+        - (anything else)           → route through the AI agent
+
+        This gives users a fast path for common actions while keeping
+        the full agent available for natural language queries.
         """
+        import re
+
         user = event.get("user")
         text = event.get("text", "")
+        channel = event.get("channel")
+        thread_ts = event.get("ts")
 
         logger.info(f"Bot mentioned by {user}: {text}")
 
+        # Clean the mention from the text
+        clean_text = re.sub(r"<@[A-Z0-9]+>", "", text).strip().lower()
+
+        # ── Command: digest ──────────────────────────────────────
+        if clean_text.startswith("digest"):
+            await _handle_digest_command(
+                clean_text=clean_text,
+                channel=channel,
+                thread_ts=thread_ts,
+                say=say,
+                user_slack_id=user,
+            )
+            return
+
+        # ── Command: help ────────────────────────────────────────
+        if clean_text in ("help", "commands", "?"):
+            help_text = (
+                "🐝 *HiveMind Commands*\n\n"
+                "• `@HiveMind digest` — Get a daily digest for all channels\n"
+                "• `@HiveMind digest #channel-name` — Get a digest for a specific channel\n"
+                "• `@HiveMind help` — Show this help message\n"
+                "• Or just ask me anything! I can search team conversations, "
+                "find files, and answer questions about your workspace."
+            )
+            await say(text=help_text, thread_ts=thread_ts)
+            return
+
+        # ── Default: AI Agent ────────────────────────────────────
+        from app.services.agent_service import agent_service
+        from app.services.membership_service import membership_service
+
+        # Derive trusted ACL context from DB — NOT from client
+        user_channel_ids = await membership_service.get_user_channel_ids(user)
+
+        response = await agent_service.process_message(
+            user_slack_id=user,
+            message=text,
+            channel_id=channel,
+            thread_ts=thread_ts,
+            user_channel_ids=user_channel_ids,
+        )
+
+        # Reply in thread
         await say(
-            text=(
-                f"👋 Hey <@{user}>! I'm HiveMind — your team intelligence agent. "
-                f"I'm currently in setup mode, learning about your workspace. "
-                f"I'll be able to help with questions, summaries, and tasks soon!"
-            ),
-            thread_ts=event.get("ts"),
+            text=response.content,
+            thread_ts=thread_ts,
         )
 
     # ─────────────────────────────────────────────────────────────
@@ -221,3 +295,170 @@ def register_event_handlers(app: AsyncApp) -> None:
             logger.error(f"Failed to handle message edit: {e}", exc_info=True)
 
     logger.info("All Slack event handlers registered")
+
+
+async def _handle_digest_command(
+    clean_text: str,
+    channel: str,
+    thread_ts: str,
+    say,
+    user_slack_id: str | None = None,
+) -> None:
+    """Handle the 'digest' command — generate on-demand digests.
+
+    Supports:
+    - @HiveMind digest              → all public channels
+    - @HiveMind digest #channel     → specific channel
+    - @HiveMind digest --me         → personalized (public + private)
+    """
+    import re
+
+    from app.services.digest_service import digest_service
+
+    # Check for --me flag (personalized digest)
+    is_personalized = "--me" in clean_text
+
+    # Extract optional channel: "digest #backend-team", "digest <#C0B5W4HHHEE|social>", or "digest <#C0B5W4HHHEE>"
+    parts = clean_text.replace("digest", "", 1).replace("--me", "").strip()
+    channel_id = None
+    channel_name = None
+    if parts:
+        # Check for Slack mention format: <#C0B5W4HHHEE|social> or <#C0B5W4HHHEE>
+        mention_match = re.match(r"^<#([A-Z0-9]+)(?:\|([^>]+))?>$", parts, re.IGNORECASE)
+        if mention_match:
+            channel_id = mention_match.group(1).upper()
+            channel_name = mention_match.group(2)
+        else:
+            # Remove # prefix if present
+            channel_name = re.sub(r"^#", "", parts).strip()
+
+    await say(
+        text="🐝 Generating digest... one moment!",
+        thread_ts=thread_ts,
+    )
+
+    try:
+        # Personalized digest: includes private channels the user is in
+        if is_personalized and not channel_id and not channel_name:
+            if not user_slack_id:
+                await say(
+                    text="❌ Could not determine your user identity.",
+                    thread_ts=thread_ts,
+                )
+                return
+
+            result = await digest_service.generate_personalized_digest(
+                user_slack_id=user_slack_id,
+            )
+            if result:
+                await say(
+                    text=f"📋 *Your Personalized Digest*\n\n{result}",
+                    thread_ts=thread_ts,
+                )
+            else:
+                await say(
+                    text="No significant activity across your channels in the last 24 hours.",
+                    thread_ts=thread_ts,
+                )
+            return
+
+        if channel_id or channel_name:
+            # Generate for a specific channel
+            from sqlalchemy import select
+
+            from app.database import AsyncSessionLocal
+            from app.models.channel import Channel
+            from app.models.workspace import Workspace
+
+            async with AsyncSessionLocal() as session:
+                # Find workspace
+                ws_result = await session.execute(
+                    select(Workspace).where(Workspace.is_active.is_(True)).limit(1)
+                )
+                workspace = ws_result.scalar_one_or_none()
+                if not workspace:
+                    await say(text="❌ No active workspace found.", thread_ts=thread_ts)
+                    return
+
+                # Find channel by ID or Name
+                if channel_id:
+                    ch_result = await session.execute(
+                        select(Channel).where(
+                            Channel.slack_channel_id == channel_id,
+                            Channel.workspace_id == workspace.id,
+                        )
+                    )
+                else:
+                    ch_result = await session.execute(
+                        select(Channel).where(
+                            Channel.name.ilike(f"%{channel_name}%"),
+                            Channel.workspace_id == workspace.id,
+                        )
+                    )
+                ch = ch_result.scalar_one_or_none()
+                if not ch:
+                    display_name = f"#{channel_name}" if channel_name else f"<#{channel_id}>"
+                    await say(
+                        text=f"❌ Channel `{display_name}` not found.",
+                        thread_ts=thread_ts,
+                    )
+                    return
+
+                # ACL: block private-channel digests if user is not a member
+                from app.models.channel import ChannelType
+
+                if ch.channel_type != ChannelType.PUBLIC:
+                    from app.services.membership_service import membership_service
+
+                    user_channels = await membership_service.get_user_channel_ids(
+                        user_slack_id
+                    )
+                    if ch.slack_channel_id not in user_channels:
+                        await say(
+                            text="🔒 You don't have access to that channel's digest.",
+                            thread_ts=thread_ts,
+                        )
+                        return
+
+                display_channel_name = ch.name
+
+                digest = await digest_service.generate_channel_digest(
+                    channel_id=ch.id,
+                    workspace_id=workspace.id,
+                    hours=24,
+                )
+
+            if digest:
+                await say(
+                    text=f"📋 *Digest for #{display_channel_name}*\n\n{digest.content}",
+                    thread_ts=thread_ts,
+                )
+            else:
+                await say(
+                    text=f"No significant activity in #{display_channel_name} in the last 24 hours.",
+                    thread_ts=thread_ts,
+                )
+        else:
+            # Generate for all channels
+            digests = await digest_service.generate_daily_digest()
+            if digests:
+                summary_parts = []
+                for d in digests:
+                    summary_parts.append(d.content)
+                full_digest = "\n\n---\n\n".join(summary_parts)
+                await say(
+                    text=f"📋 *Daily Digest*\n\n{full_digest}",
+                    thread_ts=thread_ts,
+                )
+            else:
+                await say(
+                    text="No significant activity across channels in the last 24 hours.",
+                    thread_ts=thread_ts,
+                )
+
+    except Exception as e:
+        logger.error(f"Digest command failed: {e}", exc_info=True)
+        await say(
+            text="❌ Failed to generate digest. Please try again.",
+            thread_ts=thread_ts,
+        )
