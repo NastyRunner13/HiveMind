@@ -74,16 +74,17 @@ Teams today are drowning in fragmented context:
 
 ### Tech Stack
 
-| Layer | Technology |
-|-------|-----------|
-| **Backend** | Python 3.12+ / FastAPI |
-| **Database** | PostgreSQL 16 |
-| **Vector DB** | pgvector (start) → Qdrant (scale) |
-| **Cache / Events** | Redis 7 + Redis Streams |
-| **Bot Framework** | Slack Bolt / MS Bot Framework |
-| **Auth** | OAuth2 + JWT, Azure AD / Google Workspace SSO |
-| **AI/LLM** | LangGraph + LangChain (model-agnostic) |
-| **Deployment** | Docker + docker-compose (dev) → Kubernetes (prod) |
+| Layer | Technology | Status |
+|-------|-----------|--------|
+| **Backend** | Python 3.12+ / FastAPI | ✅ Implemented |
+| **Database** | PostgreSQL 16 + pgvector | ✅ Implemented |
+| **Vector Store** | pgvector (co-located) → Qdrant (at scale) | ✅ pgvector done |
+| **Event Bus** | Redis 7 (Redis Streams) | ✅ Implemented |
+| **AI / LLM** | LangChain + LangGraph (OpenAI, Google, Anthropic, Ollama) | ✅ Implemented |
+| **Scheduling** | APScheduler (async cron) | ✅ Implemented |
+| **Bot Framework** | Slack Bolt (Socket Mode + Events API) | ✅ Implemented |
+| **Auth** | OAuth2 + JWT, Azure AD / Google Workspace SSO | 🔜 Planned |
+| **Deployment** | Docker + docker-compose (dev) → Kubernetes (prod) | ✅ Dev done |
 
 ---
 
@@ -102,13 +103,15 @@ git clone https://github.com/NastyRunner13/HiveMind.git
 cd HiveMind
 ```
 
-### 2. Start Infrastructure (PostgreSQL)
+### 2. Start Infrastructure (PostgreSQL + Redis)
 
 ```bash
 docker-compose up -d
 ```
 
-This starts a PostgreSQL 16 container with the `hivemind` database.
+This starts:
+- **PostgreSQL 16** with pgvector extension (`hivemind-db`)
+- **Redis 7** for event bus and caching (`hivemind-redis`)
 
 ### 3. Set Up the Backend
 
@@ -132,7 +135,11 @@ pip install -r requirements.txt
 
 ```bash
 cp .env.example .env
-# Edit .env with your Slack credentials (optional) and database settings
+# Edit .env with your settings:
+#   - Database connection (POSTGRES_PASSWORD)
+#   - Slack credentials (SLACK_BOT_TOKEN, SLACK_SIGNING_SECRET, SLACK_APP_TOKEN)
+#   - LLM API key (LLM_API_KEY) — required for AI agent & digests
+#   - Redis URL (defaults to localhost:6379)
 ```
 
 ### 5. Run Database Migrations
@@ -160,35 +167,53 @@ The API will be available at:
 HiveMind/
 ├── backend/
 │   ├── app/
+│   │   ├── agent/            # AI Agent (LangChain + LangGraph)
+│   │   │   ├── llm.py        # LLM factory (OpenAI/Google/Anthropic/Ollama)
+│   │   │   ├── tools.py      # LangChain tools wrapping HiveMind services
+│   │   │   ├── prompts.py    # System prompts & safety instructions
+│   │   │   └── graph.py      # LangGraph ReAct agent workflow
 │   │   ├── api/              # FastAPI route handlers
 │   │   │   ├── channels.py   # Channel CRUD endpoints
 │   │   │   ├── health.py     # Health check endpoint
 │   │   │   ├── messages.py   # Message query endpoints
+│   │   │   ├── knowledge.py  # Semantic search endpoint
+│   │   │   ├── digests.py    # Digest generation & listing
 │   │   │   └── router.py     # API router aggregation
+│   │   ├── events/           # Redis Streams event bus
+│   │   │   └── bus.py        # EventBus with publish/subscribe
 │   │   ├── models/           # SQLAlchemy ORM models
 │   │   │   ├── base.py       # Base model with common fields
 │   │   │   ├── channel.py    # Slack channel model
 │   │   │   ├── file_metadata.py  # File metadata tracking
 │   │   │   ├── message.py    # Message storage model
 │   │   │   ├── user.py       # User model with roles
-│   │   │   └── workspace.py  # Workspace/org model
+│   │   │   ├── workspace.py  # Workspace/org model
+│   │   │   ├── embedding.py  # DocumentChunk with pgvector + ACL
+│   │   │   └── digest.py     # Generated channel summaries
 │   │   ├── schemas/          # Pydantic request/response schemas
 │   │   ├── services/         # Business logic layer
-│   │   │   ├── channel_service.py  # Channel operations
-│   │   │   └── ingestion.py  # Slack data ingestion service
+│   │   │   ├── ingestion.py  # Slack event → DB + event bus pipeline
+│   │   │   ├── embedding_service.py  # Text chunking + embedding
+│   │   │   ├── knowledge_service.py  # ACL-aware semantic search
+│   │   │   ├── agent_service.py      # Agent orchestrator
+│   │   │   ├── digest_service.py     # LLM-powered channel summaries
+│   │   │   └── scheduler.py          # APScheduler cron jobs
 │   │   ├── slack/            # Slack bot integration
 │   │   │   ├── bot.py        # Bot lifecycle management
-│   │   │   ├── events.py     # Slack event handlers
+│   │   │   ├── events.py     # Slack event handlers (→ AI agent)
 │   │   │   └── sync.py       # Historical data sync
 │   │   ├── config.py         # Pydantic settings management
 │   │   ├── database.py       # SQLAlchemy async engine setup
 │   │   └── main.py           # FastAPI app entry point
 │   ├── alembic/              # Database migrations
+│   ├── tests/                # Test suite (per-integration subpackages)
+│   │   └── slack/            # Slack unit + live tests (42 passing)
 │   ├── alembic.ini           # Alembic configuration
 │   ├── requirements.txt      # Python dependencies
 │   └── .env.example          # Environment variable template
-├── docker-compose.yml        # Development infrastructure
-├── AGENT.md                  # AI agent guidelines for this project
+├── docker-compose.yml        # PostgreSQL + pgvector + Redis
+├── .github/workflows/ci.yml  # CI pipeline (lint, test, Docker build)
+├── AGENTS.md                 # AI agent guidelines for this project
 ├── CONTRIBUTING.md           # Contribution guidelines
 └── .gitignore
 ```
@@ -206,11 +231,23 @@ HiveMind/
 | `GET` | `/api/v1/channels/{id}` | Get channel details |
 | `GET` | `/api/v1/messages` | Query messages with filters |
 | `POST` | `/api/v1/messages` | Ingest a message |
+| `POST` | `/api/v1/knowledge/search` | Semantic search across the Knowledge Fabric |
+| `GET` | `/api/v1/knowledge/status` | Get indexing status and stats |
+| `POST` | `/api/v1/digests/generate` | Generate an on-demand channel digest |
+| `GET` | `/api/v1/digests` | List past digests |
+| `GET` | `/api/v1/digests/{id}` | Get a specific digest |
 
 ### Running Tests
 
 ```bash
-pytest
+# Run all unit tests (no credentials needed)
+python -m pytest tests/slack/test_bot.py tests/slack/test_events.py tests/slack/test_sync.py -v
+
+# Run Slack live tests (requires .env with valid SLACK_BOT_TOKEN)
+python -m pytest tests/slack/test_live.py -v -s
+
+# Run everything
+python -m pytest -v -s
 ```
 
 ### Database Migrations
@@ -232,6 +269,7 @@ alembic downgrade -1
 
 ### Phase 1 — Core Intelligence (Current)
 
+#### Milestone 1 — Foundation ✅
 - [x] FastAPI backend with async PostgreSQL
 - [x] SQLAlchemy models (Users, Channels, Messages, Files, Workspaces)
 - [x] Slack bot integration (Socket Mode + Events API)
@@ -239,14 +277,25 @@ alembic downgrade -1
 - [x] REST API for querying ingested data
 - [x] Alembic database migrations
 - [x] Docker Compose for local development
-- [ ] Knowledge Fabric (vector embeddings + semantic search)
-- [ ] Daily digest / channel summaries
-- [ ] Task management integration (Planner/Jira)
+- [x] CI/CD pipeline (lint, test, Docker build)
+- [x] Comprehensive test suite (42 unit tests + 7 live tests)
+
+#### Milestone 2 — Core Intelligence 🔶 *(Code Complete, Under Review)*
+- [x] Redis Streams event bus (decoupled event pipeline)
+- [x] Knowledge Fabric (pgvector embeddings + ACL-aware semantic search)
+- [x] AI Agent (LangGraph ReAct agent with 4 tools)
+- [x] Daily digest / channel summaries (LLM-powered + APScheduler)
+- [x] Knowledge & Digest REST APIs
+- [x] Provider-agnostic LLM factory (OpenAI, Google, Anthropic, Ollama)
+- [ ] Code review & integration testing with real LLM keys
+- [ ] Dedicated unit tests for new modules
+
+#### Milestone 3 — Phase 1 Remaining
 - [ ] RBAC with OBO token exchange
+- [ ] Task management integration (Planner/Jira)
 - [ ] Proactive behaviors (nudges, reminders)
 - [ ] Onboarding engine
 - [ ] KT document generation
-- [ ] Redis Streams event bus
 
 ### Phase 2 — Skills Engine
 
