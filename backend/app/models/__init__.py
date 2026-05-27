@@ -7,7 +7,10 @@ Alembic can discover them for migration auto-generation.
 
 from app.models.base import Base
 from app.models.channel import Channel
+from app.models.digest import Digest
+from app.models.embedding import DocumentChunk
 from app.models.file_metadata import FileMetadata
+from app.models.membership import ChannelMembership
 from app.models.message import Message
 from app.models.user import SlackUser
 from app.models.workspace import Workspace
@@ -19,4 +22,7 @@ __all__ = [
     "SlackUser",
     "Message",
     "FileMetadata",
+    "DocumentChunk",
+    "Digest",
+    "ChannelMembership",
 ]

@@ -22,6 +22,27 @@ import pytest
 class TestSyncChannels:
     """Tests for sync_channels()."""
 
+    @pytest.fixture(autouse=True)
+    def _mock_db_session(self):
+        """Mock AsyncSessionLocal so sync_channels doesn't hit the real DB.
+
+        sync_channels now looks up the workspace for membership sync;
+        we return None so it skips the membership sync path."""
+        from unittest.mock import MagicMock
+
+        mock_session = AsyncMock()
+        ws_result = MagicMock()
+        ws_result.scalar_one_or_none.return_value = None
+        mock_session.execute = AsyncMock(return_value=ws_result)
+
+        with patch("app.database.AsyncSessionLocal") as mock_factory:
+            mock_factory.return_value.__aenter__ = AsyncMock(
+                return_value=mock_session
+            )
+            mock_factory.return_value.__aexit__ = AsyncMock(return_value=None)
+            yield
+
+
     @pytest.mark.asyncio
     @patch("app.slack.sync._ensure_workspace", new_callable=AsyncMock)
     @patch("app.slack.sync.ingest_channel_from_api", new_callable=AsyncMock)

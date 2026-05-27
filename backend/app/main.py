@@ -4,6 +4,8 @@ HiveMind Backend — FastAPI Application Entry Point.
 This is the main module that ties everything together:
 - FastAPI app with lifespan management
 - Slack bot startup/shutdown
+- Redis Event Bus startup/shutdown
+- Daily digest scheduler
 - API route registration
 - CORS middleware for future frontend
 
@@ -37,20 +39,30 @@ async def lifespan(app: FastAPI):
 
     Startup:
       1. Initialize database connection
-      2. Create Slack bot (if configured)
-      3. Start Slack bot in Socket Mode (dev) or wait for HTTP events (prod)
+      2. Connect Redis Event Bus
+      3. Start knowledge indexing consumer (background task)
+      4. Create Slack bot (if configured)
+      5. Start Slack bot in Socket Mode (dev) or wait for HTTP events (prod)
+      6. Start daily digest scheduler (if enabled)
 
     Shutdown:
-      1. Disconnect Slack bot
-      2. Close database connections
+      1. Stop digest scheduler
+      2. Cancel knowledge consumer
+      3. Disconnect Slack bot
+      4. Disconnect Redis Event Bus
+      5. Close database connections
     """
+    import asyncio
+
     logger.info(
         f"🐝 Starting {settings.app_name} v{settings.app_version} ({settings.app_env})"
     )
 
+    # Track background tasks for graceful shutdown
+    consumer_task = None
+
     # ── Startup ──────────────────────────────────────────────────
-    # Database engine is created on import in database.py
-    # Just verify connectivity
+    # 1. Database
     from app.database import engine
 
     try:
@@ -61,7 +73,33 @@ async def lifespan(app: FastAPI):
         logger.error(f"❌ Database connection failed: {e}")
         logger.error("Make sure PostgreSQL is running. Try: docker-compose up -d db")
 
-    # Initialize Slack bot
+    # 1b. Validate embedding dimensions match the DB schema
+    try:
+        settings.validate_embedding_dimensions()
+        logger.info(
+            f"✅ Embedding dimensions validated: {settings.embedding_dimensions}d "
+            f"({settings.embedding_provider}/{settings.embedding_model})"
+        )
+    except SystemExit:
+        raise  # Let the SystemExit propagate to kill the app
+
+    # 2. Redis Event Bus
+    from app.events.bus import event_bus
+
+    try:
+        await event_bus.connect()
+    except Exception as e:
+        logger.warning(f"⚠️  Redis Event Bus not available: {e}")
+        logger.warning("Events will be skipped. Try: docker-compose up -d redis")
+
+    # 3. Knowledge indexing consumer (background task)
+    if event_bus.is_connected:
+        from app.events.consumers import start_knowledge_consumer
+
+        consumer_task = asyncio.create_task(start_knowledge_consumer())
+        logger.info("✅ Knowledge indexing consumer started")
+
+    # 4. Slack bot
     from app.slack.bot import create_slack_app, start_slack_bot
 
     slack_app = create_slack_app()
@@ -69,6 +107,15 @@ async def lifespan(app: FastAPI):
         await start_slack_bot()
     else:
         logger.warning("⚠️  Slack bot not started — configure credentials in .env")
+
+    # 5. Scheduler (always started — handles both digest + membership sync)
+    from app.services.scheduler import scheduler_service
+
+    try:
+        scheduler_service.start()
+        logger.info("✅ Scheduler started")
+    except Exception as e:
+        logger.warning(f"⚠️  Scheduler failed to start: {e}")
 
     logger.info(f"🚀 {settings.app_name} is ready!")
     logger.info("   API docs: http://localhost:8000/docs")
@@ -78,10 +125,30 @@ async def lifespan(app: FastAPI):
     # ── Shutdown ─────────────────────────────────────────────────
     logger.info(f"Shutting down {settings.app_name}...")
 
+    # Stop scheduler
+    try:
+        scheduler_service.stop()
+    except Exception:
+        pass
+
+    # Cancel knowledge consumer
+    if consumer_task and not consumer_task.done():
+        consumer_task.cancel()
+        try:
+            await asyncio.wait_for(consumer_task, timeout=5.0)
+        except (asyncio.CancelledError, asyncio.TimeoutError):
+            pass
+        logger.info("Knowledge indexing consumer stopped")
+
+    # Disconnect Slack
     from app.slack.bot import stop_slack_bot
 
     await stop_slack_bot()
 
+    # Disconnect Redis
+    await event_bus.disconnect()
+
+    # Close DB
     from app.database import engine
 
     await engine.dispose()

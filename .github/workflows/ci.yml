@@ -2,7 +2,7 @@
 # HiveMind CI Pipeline
 # ============================================
 # Runs on every PR and push to main.
-# Jobs: lint (ruff), test (pytest + PostgreSQL), docker (build check).
+# Jobs: lint (ruff), test (pytest + PostgreSQL + Redis), docker (build check).
 
 name: CI
 
@@ -47,7 +47,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:16-alpine
+        image: pgvector/pgvector:pg16
         env:
           POSTGRES_DB: hivemind_test
           POSTGRES_USER: hivemind
@@ -60,17 +60,37 @@ jobs:
           --health-timeout 5s
           --health-retries 5
 
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     env:
       DATABASE_URL: postgresql+asyncpg://hivemind:hivemind_ci@localhost:5432/hivemind_test
       APP_ENV: testing
       APP_NAME: HiveMind
       APP_VERSION: 0.1.0
       LOG_LEVEL: WARNING
+      # Redis for event bus
+      REDIS_URL: redis://localhost:6379/0
       # Slack tokens intentionally blank — unit tests use mocks
       SLACK_BOT_TOKEN: ""
       SLACK_SIGNING_SECRET: ""
       SLACK_APP_TOKEN: ""
       SLACK_SOCKET_MODE: "false"
+      # LLM tokens intentionally blank — unit tests use mocks
+      LLM_API_KEY: ""
+      LLM_PROVIDER: "openai"
+      LLM_MODEL: "gpt-4o-mini"
+      EMBEDDING_API_KEY: ""
+      EMBEDDING_PROVIDER: "openai"
+      # Digest disabled in CI
+      DIGEST_ENABLED: "false"
 
     steps:
       - name: Checkout code

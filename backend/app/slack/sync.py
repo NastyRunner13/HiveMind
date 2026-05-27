@@ -47,16 +47,29 @@ async def _ensure_workspace(client: AsyncWebClient) -> None:
 async def sync_channels(client: AsyncWebClient) -> dict:
     """
     Fetch all channels the bot is a member of and sync to database.
+    Also syncs channel memberships for ACL enforcement.
 
-    Returns a summary dict: {synced: int, new: int, updated: int}
+    Returns a summary dict: {synced: int, new: int, updated: int, members_synced: int}
     """
     logger.info("Starting channel sync...")
 
     # Ensure workspace exists before syncing channels
     await _ensure_workspace(client)
 
-    stats = {"synced": 0, "new": 0, "updated": 0}
+    stats = {"synced": 0, "new": 0, "updated": 0, "members_synced": 0}
     cursor = None
+
+    # Get workspace for membership sync
+    from app.database import AsyncSessionLocal
+    from app.models.workspace import Workspace
+
+    async with AsyncSessionLocal() as session:
+        from sqlalchemy import select
+
+        ws_result = await session.execute(
+            select(Workspace).where(Workspace.is_active.is_(True)).limit(1)
+        )
+        workspace = ws_result.scalar_one_or_none()
 
     while True:
         # conversations.list returns channels the bot can see
@@ -80,6 +93,21 @@ async def sync_channels(client: AsyncWebClient) -> dict:
                     stats["new"] += 1
                 else:
                     stats["updated"] += 1
+
+                # Sync channel members for ACL
+                if workspace:
+                    try:
+                        await _sync_channel_members(
+                            client=client,
+                            slack_channel_id=channel_data.get("id", ""),
+                            workspace_id=workspace.id,
+                        )
+                        stats["members_synced"] += 1
+                    except Exception as e:
+                        logger.warning(
+                            f"Failed to sync members for "
+                            f"{channel_data.get('id')}: {e}"
+                        )
             except Exception as e:
                 logger.error(
                     f"Failed to sync channel {channel_data.get('id')}: {e}",
@@ -93,9 +121,52 @@ async def sync_channels(client: AsyncWebClient) -> dict:
 
     logger.info(
         f"Channel sync complete: {stats['synced']} synced "
-        f"({stats['new']} new, {stats['updated']} updated)"
+        f"({stats['new']} new, {stats['updated']} updated, "
+        f"{stats['members_synced']} with members)"
     )
     return stats
+
+
+async def _sync_channel_members(
+    client: AsyncWebClient,
+    slack_channel_id: str,
+    workspace_id,
+) -> None:
+    """
+    Fetch and sync members for a single channel.
+
+    Called during channel sync to populate the channel_memberships
+    table for ACL enforcement.
+    """
+    from app.services.membership_service import membership_service
+
+    member_ids = []
+    cursor = None
+
+    while True:
+        kwargs = {"channel": slack_channel_id, "limit": 200}
+        if cursor:
+            kwargs["cursor"] = cursor
+
+        result = await client.conversations_members(**kwargs)
+        if not result["ok"]:
+            logger.warning(
+                f"conversations.members failed for "
+                f"{slack_channel_id}: {result.get('error')}"
+            )
+            break
+
+        member_ids.extend(result.get("members", []))
+        cursor = result.get("response_metadata", {}).get("next_cursor")
+        if not cursor:
+            break
+
+    if member_ids:
+        await membership_service.sync_channel_members(
+            slack_channel_id=slack_channel_id,
+            member_slack_ids=member_ids,
+            workspace_id=workspace_id,
+        )
 
 
 async def sync_users(client: AsyncWebClient) -> dict:
