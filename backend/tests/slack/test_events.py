@@ -265,14 +265,14 @@ class TestHandleDigestCommand:
     """Tests for the _handle_digest_command private helper in app.slack.events."""
 
     @pytest.mark.asyncio
-    @patch("app.services.digest_service.digest_service")
-    @patch("app.database.AsyncSessionLocal")
+    @patch("app.slack.events.digest_service")
+    @patch("app.slack.events.AsyncSessionLocal")
     async def test_digest_command_with_channel_mention(
         self, mock_session_cls, mock_digest_service
     ):
         """Should correctly parse a Slack channel mention and query by slack_channel_id."""
         from app.slack.events import _handle_digest_command
-        from app.models.channel import Channel
+        from app.models.channel import Channel, ChannelType
         from app.models.workspace import Workspace
 
         # Mock say
@@ -284,7 +284,12 @@ class TestHandleDigestCommand:
 
         # Mock workspace and channel results
         mock_workspace = Workspace(id="204ab53a-a900-48ee-95de-3bf4dccdd89e", is_active=True)
-        mock_channel = Channel(id="b6af1f5d-7d73-49c3-a352-1ba98ad17f78", slack_channel_id="C0B5W4HHHEE", name="social")
+        mock_channel = Channel(
+            id="b6af1f5d-7d73-49c3-a352-1ba98ad17f78",
+            slack_channel_id="C0B5W4HHHEE",
+            name="social",
+            channel_type=ChannelType.PUBLIC,
+        )
 
         mock_execute = AsyncMock()
         mock_session.execute = mock_execute
@@ -326,14 +331,14 @@ class TestHandleDigestCommand:
         assert "slack_channel_id" in str(channel_query)
 
     @pytest.mark.asyncio
-    @patch("app.services.digest_service.digest_service")
-    @patch("app.database.AsyncSessionLocal")
+    @patch("app.slack.events.digest_service")
+    @patch("app.slack.events.AsyncSessionLocal")
     async def test_digest_command_with_channel_name(
         self, mock_session_cls, mock_digest_service
     ):
         """Should correctly parse a plain channel name and query by name ILIKE."""
         from app.slack.events import _handle_digest_command
-        from app.models.channel import Channel
+        from app.models.channel import Channel, ChannelType
         from app.models.workspace import Workspace
 
         # Mock say
@@ -345,7 +350,12 @@ class TestHandleDigestCommand:
 
         # Mock workspace and channel results
         mock_workspace = Workspace(id="204ab53a-a900-48ee-95de-3bf4dccdd89e", is_active=True)
-        mock_channel = Channel(id="b6af1f5d-7d73-49c3-a352-1ba98ad17f78", slack_channel_id="C0B5W4HHHEE", name="social")
+        mock_channel = Channel(
+            id="b6af1f5d-7d73-49c3-a352-1ba98ad17f78",
+            slack_channel_id="C0B5W4HHHEE",
+            name="social",
+            channel_type=ChannelType.PUBLIC,
+        )
 
         mock_execute = AsyncMock()
         mock_session.execute = mock_execute

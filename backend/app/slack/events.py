@@ -12,10 +12,45 @@ with the 3-second timeout requirement.
 """
 
 import logging
+from typing import Any
 
 from slack_bolt.async_app import AsyncApp
 
 logger = logging.getLogger(__name__)
+
+AsyncSessionLocal: Any = None
+digest_service: Any = None
+membership_service: Any = None
+
+
+def _get_async_session_local() -> Any:
+    """Return the async session factory, importing lazily for testability."""
+    global AsyncSessionLocal
+    if AsyncSessionLocal is None:
+        from app.database import AsyncSessionLocal as session_factory
+
+        AsyncSessionLocal = session_factory
+    return AsyncSessionLocal
+
+
+def _get_digest_service() -> Any:
+    """Return the digest service singleton, importing lazily for testability."""
+    global digest_service
+    if digest_service is None:
+        from app.services.digest_service import digest_service as service
+
+        digest_service = service
+    return digest_service
+
+
+def _get_membership_service() -> Any:
+    """Return the membership service singleton, importing lazily for testability."""
+    global membership_service
+    if membership_service is None:
+        from app.services.membership_service import membership_service as service
+
+        membership_service = service
+    return membership_service
 
 
 def register_event_handlers(app: AsyncApp) -> None:
@@ -175,10 +210,8 @@ def register_event_handlers(app: AsyncApp) -> None:
         This updates channel membership records used for ACL-scoped
         vector search and agent tool authorization.
         """
-        from app.services.membership_service import membership_service
-
         try:
-            await membership_service.handle_member_joined(
+            await _get_membership_service().handle_member_joined(
                 slack_user_id=event.get("user"),
                 slack_channel_id=event.get("channel"),
             )
@@ -193,10 +226,8 @@ def register_event_handlers(app: AsyncApp) -> None:
         Soft-deletes the membership record so the user can no longer
         access content from this channel via agent tools or search.
         """
-        from app.services.membership_service import membership_service
-
         try:
-            await membership_service.handle_member_left(
+            await _get_membership_service().handle_member_left(
                 slack_user_id=event.get("user"),
                 slack_channel_id=event.get("channel"),
             )
@@ -259,10 +290,9 @@ def register_event_handlers(app: AsyncApp) -> None:
 
         # ── Default: AI Agent ────────────────────────────────────
         from app.services.agent_service import agent_service
-        from app.services.membership_service import membership_service
 
         # Derive trusted ACL context from DB — NOT from client
-        user_channel_ids = await membership_service.get_user_channel_ids(user)
+        user_channel_ids = await _get_membership_service().get_user_channel_ids(user)
 
         response = await agent_service.process_message(
             user_slack_id=user,
@@ -313,7 +343,7 @@ async def _handle_digest_command(
     """
     import re
 
-    from app.services.digest_service import digest_service
+    digest_svc = _get_digest_service()
 
     # Check for --me flag (personalized digest)
     is_personalized = "--me" in clean_text
@@ -347,7 +377,7 @@ async def _handle_digest_command(
                 )
                 return
 
-            result = await digest_service.generate_personalized_digest(
+            result = await digest_svc.generate_personalized_digest(
                 user_slack_id=user_slack_id,
             )
             if result:
@@ -366,11 +396,10 @@ async def _handle_digest_command(
             # Generate for a specific channel
             from sqlalchemy import select
 
-            from app.database import AsyncSessionLocal
             from app.models.channel import Channel
             from app.models.workspace import Workspace
 
-            async with AsyncSessionLocal() as session:
+            async with _get_async_session_local()() as session:
                 # Find workspace
                 ws_result = await session.execute(
                     select(Workspace).where(Workspace.is_active.is_(True)).limit(1)
@@ -408,9 +437,7 @@ async def _handle_digest_command(
                 from app.models.channel import ChannelType
 
                 if ch.channel_type != ChannelType.PUBLIC:
-                    from app.services.membership_service import membership_service
-
-                    user_channels = await membership_service.get_user_channel_ids(
+                    user_channels = await _get_membership_service().get_user_channel_ids(
                         user_slack_id
                     )
                     if ch.slack_channel_id not in user_channels:
@@ -422,7 +449,7 @@ async def _handle_digest_command(
 
                 display_channel_name = ch.name
 
-                digest = await digest_service.generate_channel_digest(
+                digest = await digest_svc.generate_channel_digest(
                     channel_id=ch.id,
                     workspace_id=workspace.id,
                     hours=24,
@@ -440,7 +467,7 @@ async def _handle_digest_command(
                 )
         else:
             # Generate for all channels
-            digests = await digest_service.generate_daily_digest()
+            digests = await digest_svc.generate_daily_digest()
             if digests:
                 summary_parts = []
                 for d in digests:

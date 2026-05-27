@@ -187,7 +187,7 @@ class TestSlackDigestCommandACL:
                 "app.slack.events.digest_service"
             ),
             patch(
-                "app.services.membership_service.membership_service"
+                "app.slack.events.membership_service"
             ) as mock_ms,
             patch(
                 "app.slack.events.AsyncSessionLocal"
@@ -244,7 +244,7 @@ class TestSlackDigestCommandACL:
                 "app.slack.events.digest_service"
             ) as mock_digest_svc,
             patch(
-                "app.services.membership_service.membership_service"
+                "app.slack.events.membership_service"
             ) as mock_ms,
             patch(
                 "app.slack.events.AsyncSessionLocal"
