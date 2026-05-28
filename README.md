@@ -83,7 +83,7 @@ Teams today are drowning in fragmented context:
 | **AI / LLM** | LangChain + LangGraph (OpenAI, Google, Anthropic, Ollama) | ✅ Implemented |
 | **Scheduling** | APScheduler (async cron) | ✅ Implemented |
 | **Bot Framework** | Slack Bolt (Socket Mode + Events API) | ✅ Implemented |
-| **Auth** | OAuth2 + JWT, Azure AD / Google Workspace SSO | 🔜 Planned |
+| **Auth** | OIDC Bearer Token Validation (Keycloak, Auth0, etc.) | ✅ Implemented |
 | **Deployment** | Docker + docker-compose (dev) → Kubernetes (prod) | ✅ Dev done |
 
 ---
@@ -103,7 +103,7 @@ git clone https://github.com/NastyRunner13/HiveMind.git
 cd HiveMind
 ```
 
-### 2. Start Infrastructure (PostgreSQL + Redis)
+### 2. Start Infrastructure (PostgreSQL + Redis + Keycloak)
 
 ```bash
 docker-compose up -d
@@ -112,6 +112,7 @@ docker-compose up -d
 This starts:
 - **PostgreSQL 16** with pgvector extension (`hivemind-db`)
 - **Redis 7** for event bus and caching (`hivemind-redis`)
+- **Keycloak 25.0** OIDC provider (`hivemind-keycloak`) for API authentication
 
 ### 3. Set Up the Backend
 
@@ -138,9 +139,13 @@ cp .env.example .env
 # Edit .env with your settings:
 #   - Database connection (POSTGRES_PASSWORD)
 #   - Slack credentials (SLACK_BOT_TOKEN, SLACK_SIGNING_SECRET, SLACK_APP_TOKEN)
+#   - OIDC settings (OIDC_ISSUER_URL, OIDC_AUDIENCE) — required for REST API auth
 #   - LLM API key (LLM_API_KEY) — required for AI agent & digests
 #   - Redis URL (defaults to localhost:6379)
 ```
+
+> [!NOTE]
+> After starting Keycloak for the first time, navigate to the admin console at http://localhost:8080 (username/password: `admin`/`admin`). Create a realm named `hivemind` and a client with the same name, then configure your `.env` settings accordingly. See `docker-compose.yml` for configuration details.
 
 ### 5. Run Database Migrations
 
@@ -182,10 +187,14 @@ HiveMind/
 │   │   ├── events/           # Redis Streams event bus
 │   │   │   ├── bus.py        # EventBus with publish/subscribe
 │   │   │   └── consumers.py  # Background consumers (knowledge indexing)
+│   │   ├── integrations/     # Platform connector boundary
+│   │   │   ├── base.py       # BasePlatformConnector protocol & DTOs
+│   │   │   └── slack/        # Slack connector compatibility adapter
 │   │   ├── models/           # SQLAlchemy ORM models
 │   │   │   ├── base.py       # Base model with UUID + timestamps
 │   │   │   ├── channel.py    # Slack channel model
 │   │   │   ├── file_metadata.py  # File metadata tracking
+│   │   │   ├── identity.py   # Canonical identity ORM models
 │   │   │   ├── message.py    # Message storage model
 │   │   │   ├── user.py       # User model with roles
 │   │   │   ├── workspace.py  # Workspace/org model
@@ -193,7 +202,10 @@ HiveMind/
 │   │   │   ├── digest.py     # Generated channel summaries
 │   │   │   └── membership.py # Channel membership for ACL enforcement
 │   │   ├── schemas/          # Pydantic request/response schemas
+│   │   ├── security/         # OIDC authentication and identity resolution
+│   │   │   └── auth.py       # JWT/JWKS signature and claims validator
 │   │   ├── services/         # Business logic (testable, no HTTP dependency)
+│   │   │   ├── authorization_service.py # Channel & message ACL checks
 │   │   │   ├── ingestion.py  # Slack event → DB pipeline + event bus
 │   │   │   ├── embedding_service.py  # Text chunking + embedding
 │   │   │   ├── knowledge_service.py  # ACL-aware semantic search + idempotent indexing
@@ -208,8 +220,8 @@ HiveMind/
 │   │   ├── config.py         # Pydantic settings with startup validation
 │   │   ├── database.py       # Async SQLAlchemy engine + session factory
 │   │   └── main.py           # FastAPI app with full lifespan management
-│   ├── alembic/              # Database migrations (0001–0003)
-│   ├── tests/                # Test suite (174+ tests, per-integration subpackages)
+│   ├── alembic/              # Database migrations (0001–0004)
+│   ├── tests/                # Test suite (209+ tests, per-integration subpackages)
 │   │   ├── agent/            # Agent, tool security, audit logging tests
 │   │   ├── events/           # Event bus + consumer tests
 │   │   ├── services/         # Service-layer tests (digest, knowledge, etc.)
@@ -230,6 +242,9 @@ HiveMind/
 
 ### API Endpoints
 
+> [!IMPORTANT]
+> All REST API endpoints (except `/health`) are secured by OIDC bearer token authentication. Clients must provide a valid token in the `Authorization: Bearer <token>` header, mapping to an active HiveMind user.
+
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/health` | Application health check |
@@ -246,7 +261,7 @@ HiveMind/
 ### Running Tests
 
 ```bash
-# Run ALL unit tests (174+ tests, no credentials needed)
+# Run ALL unit tests (209+ tests, no credentials needed)
 python -m pytest tests/ -v --ignore=tests/slack/test_live.py
 
 # Run by test suite
@@ -254,6 +269,7 @@ python -m pytest tests/slack/ -v          # Slack bot, events, sync (44 tests)
 python -m pytest tests/agent/ -v           # Agent graph, tools, security, audit (22+ tests)
 python -m pytest tests/services/ -v        # Services: digest, knowledge, membership, etc. (40+ tests)
 python -m pytest tests/events/ -v           # Event bus + indexing consumer (10+ tests)
+python -m pytest tests/security/ -v         # OIDC authentication & identity validation (25+ tests)
 
 # Run Slack live tests (requires .env with valid SLACK_BOT_TOKEN)
 python -m pytest tests/slack/test_live.py -v -s
@@ -315,7 +331,8 @@ alembic downgrade -1
 - [x] Comprehensive test suites: agent security, audit, consumers, services
 
 #### Milestone 4 — Phase 1 Remaining *(Upcoming)*
-- [ ] RBAC with OBO token exchange
+- [x] OIDC client bearer authentication & canonical identity mapping
+- [ ] RBAC with OBO token exchange for external sources (Graph)
 - [ ] Task management integration (Planner/Jira)
 - [ ] Proactive behaviors (nudges, reminders)
 - [ ] Onboarding engine

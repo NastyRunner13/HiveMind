@@ -54,3 +54,6 @@ htmlcov/
 *.zip
 
 /concepts
+/handoff
+/tasks
+.ruff_cache

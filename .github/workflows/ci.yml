@@ -19,7 +19,7 @@ concurrency:
 jobs:
   # ─── Lint ────────────────────────────────────────────────────
   lint:
-    name: 🧹 Lint
+    name: Lint
     runs-on: ubuntu-latest
 
     steps:
@@ -42,7 +42,7 @@ jobs:
 
   # ─── Unit Tests ──────────────────────────────────────────────
   test:
-    name: 🧪 Unit Tests
+    name: Unit Tests
     runs-on: ubuntu-latest
 
     services:
@@ -120,7 +120,7 @@ jobs:
 
   # ─── Docker Build ────────────────────────────────────────────
   docker-build:
-    name: 🐳 Docker Build
+    name: Docker Build
     runs-on: ubuntu-latest
 
     steps:
