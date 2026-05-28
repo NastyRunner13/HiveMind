@@ -62,6 +62,12 @@ class ChannelMembership(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         nullable=False,
         index=True,
     )
+    canonical_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
 
     # ── Denormalized Slack IDs (for fast ACL lookups) ────────────
     # These avoid JOINs when resolving "which channels can user X see?"
@@ -69,14 +75,10 @@ class ChannelMembership(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         String(32), nullable=False, index=True
     )
 
-    slack_user_id: Mapped[str] = mapped_column(
-        String(32), nullable=False, index=True
-    )
+    slack_user_id: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
 
     # ── Membership State ─────────────────────────────────────────
-    is_active: Mapped[bool] = mapped_column(
-        Boolean, default=True, nullable=False
-    )
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
     joined_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -86,6 +88,7 @@ class ChannelMembership(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     workspace = relationship("Workspace")
     channel = relationship("Channel")
     user = relationship("SlackUser")
+    canonical_user = relationship("User")
 
     # ── Constraints ──────────────────────────────────────────────
     __table_args__ = (

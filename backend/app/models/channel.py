@@ -23,6 +23,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
+from app.models.identity import Platform
 
 
 class ChannelType(str, enum.Enum):
@@ -43,6 +44,24 @@ class Channel(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         ForeignKey("workspaces.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
+    )
+    workspace_integration_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("workspace_integrations.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    platform: Mapped[Platform] = mapped_column(
+        Enum(
+            Platform,
+            name="platform_enum",
+            values_callable=lambda values: [value.value for value in values],
+        ),
+        nullable=False,
+        default=Platform.SLACK,
+    )
+    external_channel_id: Mapped[str | None] = mapped_column(
+        String(255), nullable=True, index=True
     )
 
     # ── Slack Identifiers ────────────────────────────────────────
@@ -78,6 +97,7 @@ class Channel(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     # ── Relationships ────────────────────────────────────────────
     workspace = relationship("Workspace", back_populates="channels")
+    workspace_integration = relationship("WorkspaceIntegration")
     messages = relationship(
         "Message", back_populates="channel", cascade="all, delete-orphan"
     )
@@ -89,6 +109,11 @@ class Channel(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             "workspace_id",
             "slack_channel_id",
             name="uq_channel_workspace_slack_id",
+        ),
+        UniqueConstraint(
+            "workspace_integration_id",
+            "external_channel_id",
+            name="uq_channel_integration_external_id",
         ),
     )
 

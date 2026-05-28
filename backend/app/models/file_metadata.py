@@ -17,6 +17,7 @@ from datetime import datetime
 from sqlalchemy import (
     Boolean,
     DateTime,
+    Enum,
     ForeignKey,
     Integer,
     String,
@@ -26,6 +27,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
+from app.models.identity import Platform
 
 
 class FileMetadata(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -49,6 +51,24 @@ class FileMetadata(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         ForeignKey("slack_users.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
+    )
+    workspace_integration_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("workspace_integrations.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    platform: Mapped[Platform] = mapped_column(
+        Enum(
+            Platform,
+            name="platform_enum",
+            values_callable=lambda values: [value.value for value in values],
+        ),
+        nullable=False,
+        default=Platform.SLACK,
+    )
+    external_file_id: Mapped[str | None] = mapped_column(
+        String(255), nullable=True, index=True
     )
 
     # ── Slack Identifiers ────────────────────────────────────────
@@ -77,11 +97,15 @@ class FileMetadata(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     slack_created_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    external_created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     # ── Relationships ────────────────────────────────────────────
     workspace = relationship("Workspace", back_populates="files")
     channel = relationship("Channel", back_populates="files")
     shared_by = relationship("SlackUser", back_populates="shared_files")
+    workspace_integration = relationship("WorkspaceIntegration")
 
     # ── Constraints ──────────────────────────────────────────────
     __table_args__ = (
@@ -89,6 +113,11 @@ class FileMetadata(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             "workspace_id",
             "slack_file_id",
             name="uq_file_workspace_slack_id",
+        ),
+        UniqueConstraint(
+            "workspace_integration_id",
+            "external_file_id",
+            name="uq_file_integration_external_id",
         ),
     )
 

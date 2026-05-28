@@ -32,6 +32,10 @@ class Workspace(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # ── Relationships ────────────────────────────────────────────
     channels = relationship("Channel", back_populates="workspace", lazy="selectin")
     users = relationship("SlackUser", back_populates="workspace", lazy="selectin")
+    canonical_users = relationship("User", back_populates="workspace", lazy="selectin")
+    integrations = relationship(
+        "WorkspaceIntegration", back_populates="workspace", lazy="selectin"
+    )
     messages = relationship("Message", back_populates="workspace")
     files = relationship("FileMetadata", back_populates="workspace")
 
