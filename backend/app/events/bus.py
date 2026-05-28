@@ -41,6 +41,7 @@ class EventType(str, enum.Enum):
     AGENT_QUERY = "agent.query"
     AGENT_RESPONSE = "agent.response"
     AGENT_TOOL_CALL = "agent.tool_call"
+    IDENTITY_MAPPED = "identity.mapped"
 
     # Digest events
     DIGEST_GENERATED = "digest.generated"
@@ -210,7 +211,6 @@ class EventBus:
                 logger.error(f"Error reading from stream {stream}: {e}")
                 break
 
-
     async def ack(
         self,
         stream: str,
@@ -267,18 +267,19 @@ class EventBus:
             messages = []
             if result and len(result) > 1:
                 for msg_id, msg_data in result[1]:
-                    messages.append({
-                        "id": msg_id,
-                        "type": msg_data.get("type"),
-                        "timestamp": msg_data.get("timestamp"),
-                        "data": json.loads(msg_data.get("data", "{}")),
-                        "stream": stream,
-                        "group": group,
-                    })
+                    messages.append(
+                        {
+                            "id": msg_id,
+                            "type": msg_data.get("type"),
+                            "timestamp": msg_data.get("timestamp"),
+                            "data": json.loads(msg_data.get("data", "{}")),
+                            "stream": stream,
+                            "group": group,
+                        }
+                    )
             if messages:
                 logger.info(
-                    f"Reclaimed {len(messages)} pending messages "
-                    f"from {stream}/{group}"
+                    f"Reclaimed {len(messages)} pending messages from {stream}/{group}"
                 )
             return messages
         except Exception as e:
