@@ -20,9 +20,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from pgvector.sqlalchemy import Vector
-from sqlalchemy import and_, delete, func, or_, select, text
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import and_, delete, func, or_, select
 
 from app.config import get_settings
 from app.database import AsyncSessionLocal
@@ -54,6 +52,9 @@ class ACLMetadata:
     allowed_channel_ids: list[str] | None = None
     allowed_user_ids: list[str] | None = None
     source_channel_id: str | None = None
+    allowed_channel_uuids: list[uuid.UUID] | None = None
+    allowed_user_uuids: list[uuid.UUID] | None = None
+    source_channel_uuid: uuid.UUID | None = None
     confidentiality: Confidentiality = Confidentiality.INTERNAL
 
 
@@ -68,6 +69,7 @@ class SearchResult:
     source_id: uuid.UUID
     source_channel_id: str | None
     chunk_index: int
+    source_channel_uuid: uuid.UUID | None = None
 
 
 # ═════════════════════════════════════════════════════════════════
@@ -87,6 +89,7 @@ def compute_acl_for_channel(channel: Channel) -> ACLMetadata:
         return ACLMetadata(
             acl_type=ACLType.EXPLICIT,
             source_channel_id=channel.slack_channel_id,
+            source_channel_uuid=channel.id,
             confidentiality=Confidentiality.CONFIDENTIAL,
         )
     elif channel.channel_type == ChannelType.PRIVATE:
@@ -94,6 +97,8 @@ def compute_acl_for_channel(channel: Channel) -> ACLMetadata:
             acl_type=ACLType.CHANNEL,
             allowed_channel_ids=[channel.slack_channel_id],
             source_channel_id=channel.slack_channel_id,
+            allowed_channel_uuids=[channel.id],
+            source_channel_uuid=channel.id,
             confidentiality=Confidentiality.INTERNAL,
         )
     else:
@@ -102,6 +107,8 @@ def compute_acl_for_channel(channel: Channel) -> ACLMetadata:
             acl_type=ACLType.PUBLIC,
             allowed_channel_ids=[channel.slack_channel_id],
             source_channel_id=channel.slack_channel_id,
+            allowed_channel_uuids=[channel.id],
+            source_channel_uuid=channel.id,
             confidentiality=Confidentiality.PUBLIC,
         )
 
@@ -178,6 +185,9 @@ class KnowledgeService:
                     allowed_channel_ids=acl.allowed_channel_ids,
                     allowed_user_ids=acl.allowed_user_ids,
                     source_channel_id=acl.source_channel_id,
+                    allowed_channel_uuids=acl.allowed_channel_uuids,
+                    allowed_user_uuids=acl.allowed_user_uuids,
+                    source_channel_uuid=acl.source_channel_uuid,
                     confidentiality=acl.confidentiality,
                     acl_last_verified=datetime.now(timezone.utc),
                 )
@@ -185,16 +195,16 @@ class KnowledgeService:
 
             await session.commit()
 
-        await event_bus.publish(EventType.DOCUMENT_INDEXED, {
-            "source_type": "message",
-            "source_id": str(message.id),
-            "chunks_created": len(chunks_with_counts),
-        })
-
-        logger.debug(
-            f"Indexed message {message.id}: "
-            f"{len(chunks_with_counts)} chunks"
+        await event_bus.publish(
+            EventType.DOCUMENT_INDEXED,
+            {
+                "source_type": "message",
+                "source_id": str(message.id),
+                "chunks_created": len(chunks_with_counts),
+            },
         )
+
+        logger.debug(f"Indexed message {message.id}: {len(chunks_with_counts)} chunks")
         return len(chunks_with_counts)
 
     async def index_file_content(
@@ -259,6 +269,9 @@ class KnowledgeService:
                     allowed_channel_ids=acl.allowed_channel_ids,
                     allowed_user_ids=acl.allowed_user_ids,
                     source_channel_id=acl.source_channel_id,
+                    allowed_channel_uuids=acl.allowed_channel_uuids,
+                    allowed_user_uuids=acl.allowed_user_uuids,
+                    source_channel_uuid=acl.source_channel_uuid,
                     confidentiality=acl.confidentiality,
                     acl_last_verified=datetime.now(timezone.utc),
                 )
@@ -266,11 +279,14 @@ class KnowledgeService:
 
             await session.commit()
 
-        await event_bus.publish(EventType.DOCUMENT_INDEXED, {
-            "source_type": "file",
-            "source_id": str(file_id),
-            "chunks_created": len(chunks_with_counts),
-        })
+        await event_bus.publish(
+            EventType.DOCUMENT_INDEXED,
+            {
+                "source_type": "file",
+                "source_id": str(file_id),
+                "chunks_created": len(chunks_with_counts),
+            },
+        )
 
         return len(chunks_with_counts)
 
@@ -283,6 +299,8 @@ class KnowledgeService:
         query: str,
         user_channel_ids: list[str] | None = None,
         user_slack_id: str | None = None,
+        user_channel_uuids: list[uuid.UUID] | None = None,
+        user_id: uuid.UUID | None = None,
         workspace_id: uuid.UUID | None = None,
         top_k: int = 10,
     ) -> list[SearchResult]:
@@ -297,6 +315,8 @@ class KnowledgeService:
             query: The natural language search query.
             user_channel_ids: Slack channel IDs the user is a member of.
             user_slack_id: The user's Slack ID (for explicit access checks).
+            user_channel_uuids: Internal channel IDs for an authenticated API user.
+            user_id: Internal authenticated user ID for explicit access checks.
             workspace_id: Limit search to a specific workspace.
             top_k: Number of results to return.
 
@@ -333,6 +353,19 @@ class KnowledgeService:
                     DocumentChunk.allowed_user_ids.contains([user_slack_id])
                 )
 
+            if user_channel_uuids:
+                acl_conditions.append(
+                    DocumentChunk.source_channel_uuid.in_(user_channel_uuids)
+                )
+                acl_conditions.append(
+                    DocumentChunk.allowed_channel_uuids.overlap(user_channel_uuids)
+                )
+
+            if user_id:
+                acl_conditions.append(
+                    DocumentChunk.allowed_user_uuids.contains([user_id])
+                )
+
             # Build the query with ACL filter and vector similarity
             stmt = (
                 select(
@@ -341,6 +374,7 @@ class KnowledgeService:
                     DocumentChunk.source_type,
                     DocumentChunk.source_id,
                     DocumentChunk.source_channel_id,
+                    DocumentChunk.source_channel_uuid,
                     DocumentChunk.chunk_index,
                     DocumentChunk.embedding.cosine_distance(query_embedding).label(
                         "distance"
@@ -373,24 +407,29 @@ class KnowledgeService:
                         chunk_id=row.id,
                         content=row.content,
                         score=round(similarity, 4),
-                        source_type=row.source_type.value if row.source_type else "unknown",
+                        source_type=row.source_type.value
+                        if row.source_type
+                        else "unknown",
                         source_id=row.source_id,
                         source_channel_id=row.source_channel_id,
                         chunk_index=row.chunk_index,
+                        source_channel_uuid=row.source_channel_uuid,
                     )
                 )
 
-            await event_bus.publish(EventType.SEARCH_PERFORMED, {
-                "query_length": len(query),
-                "results_count": len(results),
-                "user_slack_id": user_slack_id,
-            })
+            await event_bus.publish(
+                EventType.SEARCH_PERFORMED,
+                {
+                    "query_length": len(query),
+                    "results_count": len(results),
+                    "user_slack_id": user_slack_id,
+                    "user_id": str(user_id) if user_id else None,
+                },
+            )
 
             return results
 
-    async def get_indexing_status(
-        self, workspace_id: uuid.UUID | None = None
-    ) -> dict:
+    async def get_indexing_status(self, workspace_id: uuid.UUID | None = None) -> dict:
         """Get stats about the indexing state of the Knowledge Fabric."""
         async with AsyncSessionLocal() as session:
             base_query = select(func.count(DocumentChunk.id))
@@ -404,9 +443,7 @@ class KnowledgeService:
             # Count by source type
             type_counts = {}
             for source_type in SourceType:
-                count_query = base_query.where(
-                    DocumentChunk.source_type == source_type
-                )
+                count_query = base_query.where(DocumentChunk.source_type == source_type)
                 count = (await session.execute(count_query)).scalar() or 0
                 type_counts[source_type.value] = count
 
@@ -454,9 +491,7 @@ class KnowledgeService:
         """
         async with AsyncSessionLocal() as session:
             result = await session.execute(
-                delete(DocumentChunk).where(
-                    DocumentChunk.source_id == source_id
-                )
+                delete(DocumentChunk).where(DocumentChunk.source_id == source_id)
             )
             await session.commit()
             return result.rowcount

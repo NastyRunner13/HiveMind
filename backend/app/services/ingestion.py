@@ -12,6 +12,7 @@ Design principles:
 """
 
 import logging
+import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import select, update
@@ -19,13 +20,46 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.database import AsyncSessionLocal
 from app.events.bus import EventType, event_bus
+from app.events.contracts import normalized_payload
 from app.models.channel import Channel, ChannelType
 from app.models.file_metadata import FileMetadata
+from app.models.identity import (
+    Platform,
+    User,
+    UserPlatformMapping,
+    WorkspaceIntegration,
+)
 from app.models.message import Message, MessageType
 from app.models.user import SlackUser
 from app.models.workspace import Workspace
 
 logger = logging.getLogger(__name__)
+
+
+async def _get_slack_integration_id(session, workspace_id) -> uuid.UUID | None:
+    result = await session.execute(
+        select(WorkspaceIntegration.id).where(
+            WorkspaceIntegration.workspace_id == workspace_id,
+            WorkspaceIntegration.platform == Platform.SLACK,
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def _ensure_slack_integration(session, workspace: Workspace) -> uuid.UUID:
+    integration_id = await _get_slack_integration_id(session, workspace.id)
+    if integration_id:
+        return integration_id
+    integration = WorkspaceIntegration(
+        workspace_id=workspace.id,
+        platform=Platform.SLACK,
+        external_workspace_id=workspace.slack_team_id,
+        display_name=workspace.name,
+        is_active=workspace.is_active,
+    )
+    session.add(integration)
+    await session.flush()
+    return integration.id
 
 
 # ═════════════════════════════════════════════════════════════════
@@ -56,10 +90,12 @@ async def get_or_create_workspace(
                 is_active=True,
             )
             session.add(workspace)
-            await session.commit()
-            await session.refresh(workspace)
+            await session.flush()
             logger.info(f"Created workspace: {name} ({slack_team_id})")
 
+        await _ensure_slack_integration(session, workspace)
+        await session.commit()
+        await session.refresh(workspace)
         return workspace
 
 
@@ -144,6 +180,7 @@ async def ingest_message(event: dict) -> None:
             return
 
         slack_channel_id = event.get("channel")
+        integration_id = await _get_slack_integration_id(session, workspace_id)
         channel_id = await _resolve_channel_id(session, slack_channel_id, workspace_id)
 
         if not channel_id:
@@ -161,6 +198,9 @@ async def ingest_message(event: dict) -> None:
             )
             channel = Channel(
                 workspace_id=workspace_id,
+                workspace_integration_id=integration_id,
+                platform=Platform.SLACK,
+                external_channel_id=slack_channel_id,
                 slack_channel_id=slack_channel_id,
                 name=f"unknown-{slack_channel_id}",
                 channel_type=inferred_type,
@@ -190,6 +230,10 @@ async def ingest_message(event: dict) -> None:
             workspace_id=workspace_id,
             channel_id=channel_id,
             sender_id=sender_id,
+            workspace_integration_id=integration_id,
+            platform=Platform.SLACK,
+            external_message_id=slack_ts,
+            external_thread_id=event.get("thread_ts"),
             slack_message_ts=slack_ts,
             thread_ts=event.get("thread_ts"),
             content=event.get("text", ""),
@@ -200,6 +244,7 @@ async def ingest_message(event: dict) -> None:
             reply_count=event.get("reply_count", 0),
             is_edited=event.get("edited") is not None,
             slack_sent_at=slack_sent_at,
+            sent_at=slack_sent_at,
         )
 
         # Upsert: insert or update on conflict
@@ -207,6 +252,10 @@ async def ingest_message(event: dict) -> None:
             workspace_id=message.workspace_id,
             channel_id=message.channel_id,
             sender_id=message.sender_id,
+            workspace_integration_id=message.workspace_integration_id,
+            platform=message.platform,
+            external_message_id=message.external_message_id,
+            external_thread_id=message.external_thread_id,
             slack_message_ts=message.slack_message_ts,
             thread_ts=message.thread_ts,
             content=message.content,
@@ -217,6 +266,7 @@ async def ingest_message(event: dict) -> None:
             reply_count=message.reply_count,
             is_edited=message.is_edited,
             slack_sent_at=message.slack_sent_at,
+            sent_at=message.sent_at,
         )
         stmt = stmt.on_conflict_do_update(
             constraint="uq_message_workspace_channel_ts",
@@ -231,15 +281,34 @@ async def ingest_message(event: dict) -> None:
         )
         await session.execute(stmt)
         await session.commit()
+        persisted = await session.execute(
+            select(Message.id).where(
+                Message.workspace_id == workspace_id,
+                Message.channel_id == channel_id,
+                Message.slack_message_ts == slack_ts,
+            )
+        )
+        message_id = persisted.scalar_one_or_none()
 
         # Publish event to bus for downstream processing (embeddings, etc.)
-        await event_bus.publish(EventType.MESSAGE_INGESTED, {
-            "slack_channel_id": slack_channel_id,
-            "slack_message_ts": slack_ts,
-            "sender_slack_id": event.get("user"),
-            "has_files": bool(event.get("files")),
-            "thread_ts": event.get("thread_ts"),
-        })
+        await event_bus.publish(
+            EventType.MESSAGE_INGESTED,
+            normalized_payload(
+                platform=Platform.SLACK,
+                workspace_id=workspace_id,
+                workspace_integration_id=integration_id,
+                channel_id=channel_id,
+                message_id=message_id,
+                sender_id=sender_id,
+                external_metadata={
+                    "channel_id": slack_channel_id,
+                    "message_ts": slack_ts,
+                    "sender_id": event.get("user"),
+                    "thread_ts": event.get("thread_ts"),
+                    "has_files": bool(event.get("files")),
+                },
+            ),
+        )
 
         logger.debug(f"Ingested message {slack_ts} in channel {slack_channel_id}")
 
@@ -289,7 +358,8 @@ async def handle_message_edit(event: dict) -> None:
         if not channel_id:
             return
 
-        await session.execute(
+        integration_id = await _get_slack_integration_id(session, workspace_id)
+        updated = await session.execute(
             update(Message)
             .where(
                 Message.workspace_id == workspace_id,
@@ -300,13 +370,28 @@ async def handle_message_edit(event: dict) -> None:
                 content=message_data.get("text", ""),
                 is_edited=True,
             )
+            .returning(Message.id, Message.sender_id)
         )
         await session.commit()
+        row = updated.one_or_none()
+        message_id = row[0] if row else None
+        sender_id = row[1] if row else None
 
-        await event_bus.publish(EventType.MESSAGE_EDITED, {
-            "slack_channel_id": channel_id_str,
-            "slack_message_ts": slack_ts,
-        })
+        await event_bus.publish(
+            EventType.MESSAGE_EDITED,
+            normalized_payload(
+                platform=Platform.SLACK,
+                workspace_id=workspace_id,
+                workspace_integration_id=integration_id,
+                channel_id=channel_id,
+                message_id=message_id,
+                sender_id=sender_id,
+                external_metadata={
+                    "channel_id": channel_id_str,
+                    "message_ts": slack_ts,
+                },
+            ),
+        )
 
         logger.debug(f"Updated edited message {slack_ts}")
 
@@ -332,6 +417,7 @@ async def ingest_file_metadata(
         if not workspace_id:
             logger.warning("No active workspace — skipping file metadata")
             return
+        integration_id = await _get_slack_integration_id(session, workspace_id)
 
         channel_id = None
         if slack_channel_id:
@@ -359,6 +445,9 @@ async def ingest_file_metadata(
 
         stmt = pg_insert(FileMetadata).values(
             workspace_id=workspace_id,
+            workspace_integration_id=integration_id,
+            platform=Platform.SLACK,
+            external_file_id=file_info.get("id", ""),
             slack_file_id=file_info.get("id", ""),
             channel_id=channel_id,
             shared_by_id=shared_by_id,
@@ -372,6 +461,7 @@ async def ingest_file_metadata(
             shares_count=max(shares_count, 1),
             is_external=file_info.get("is_external", False),
             slack_created_at=slack_created_at,
+            external_created_at=slack_created_at,
         )
         stmt = stmt.on_conflict_do_update(
             constraint="uq_file_workspace_slack_id",
@@ -384,14 +474,32 @@ async def ingest_file_metadata(
         )
         await session.execute(stmt)
         await session.commit()
+        persisted = await session.execute(
+            select(FileMetadata.id).where(
+                FileMetadata.workspace_id == workspace_id,
+                FileMetadata.slack_file_id == file_info.get("id", ""),
+            )
+        )
+        file_id = persisted.scalar_one_or_none()
 
-        await event_bus.publish(EventType.FILE_SHARED, {
-            "slack_file_id": file_info.get("id"),
-            "filename": file_info.get("name"),
-            "filetype": file_info.get("filetype"),
-            "slack_channel_id": slack_channel_id,
-            "shared_by": file_info.get("user"),
-        })
+        await event_bus.publish(
+            EventType.FILE_SHARED,
+            normalized_payload(
+                platform=Platform.SLACK,
+                workspace_id=workspace_id,
+                workspace_integration_id=integration_id,
+                file_id=file_id,
+                channel_id=channel_id,
+                shared_by_id=shared_by_id,
+                external_metadata={
+                    "file_id": file_info.get("id"),
+                    "channel_id": slack_channel_id,
+                    "shared_by": file_info.get("user"),
+                    "filename": file_info.get("name"),
+                    "filetype": file_info.get("filetype"),
+                },
+            ),
+        )
 
         logger.debug(
             f"Ingested file metadata: {file_info.get('name')} "
@@ -433,6 +541,7 @@ async def ingest_channel_from_api(channel_data: dict) -> bool:
 async def _upsert_channel(session, channel_data: dict, workspace_id) -> bool:
     """Upsert a channel record. Returns True if new."""
     slack_id = channel_data.get("id", "")
+    integration_id = await _get_slack_integration_id(session, workspace_id)
 
     # Determine channel type
     if channel_data.get("is_im"):
@@ -446,6 +555,9 @@ async def _upsert_channel(session, channel_data: dict, workspace_id) -> bool:
 
     values = {
         "workspace_id": workspace_id,
+        "workspace_integration_id": integration_id,
+        "platform": Platform.SLACK,
+        "external_channel_id": slack_id,
         "slack_channel_id": slack_id,
         "name": channel_data.get("name", f"unknown-{slack_id}"),
         "channel_type": ch_type,
@@ -480,11 +592,26 @@ async def _upsert_channel(session, channel_data: dict, workspace_id) -> bool:
     await session.commit()
 
     if is_new:
-        await event_bus.publish(EventType.CHANNEL_CREATED, {
-            "slack_channel_id": slack_id,
-            "name": channel_data.get("name"),
-            "channel_type": ch_type.value,
-        })
+        created = await session.execute(
+            select(Channel.id).where(
+                Channel.workspace_id == workspace_id,
+                Channel.slack_channel_id == slack_id,
+            )
+        )
+        await event_bus.publish(
+            EventType.CHANNEL_CREATED,
+            normalized_payload(
+                platform=Platform.SLACK,
+                workspace_id=workspace_id,
+                workspace_integration_id=integration_id,
+                channel_id=created.scalar_one_or_none(),
+                external_metadata={
+                    "channel_id": slack_id,
+                    "name": channel_data.get("name"),
+                    "channel_type": ch_type.value,
+                },
+            ),
+        )
 
     return is_new
 
@@ -521,6 +648,7 @@ async def ingest_user(user_data: dict) -> bool:
         workspace_id = await _get_workspace_id(session)
         if not workspace_id:
             return False
+        integration_id = await _get_slack_integration_id(session, workspace_id)
 
         slack_id = user_data.get("id", "")
         profile = user_data.get("profile", {})
@@ -570,13 +698,79 @@ async def ingest_user(user_data: dict) -> bool:
             },
         )
         await session.execute(stmt)
+        # Flush (not commit) to get the persisted SlackUser row
+        # without closing the transaction.  The canonical User +
+        # UserPlatformMapping upserts below share the same
+        # transaction so that a failure rolls back atomically.
+        await session.flush()
+        persisted = await session.execute(
+            select(SlackUser).where(
+                SlackUser.workspace_id == workspace_id,
+                SlackUser.slack_user_id == slack_id,
+            )
+        )
+        slack_user = persisted.scalar_one_or_none()
+        canonical_id = None
+        if slack_user and integration_id:
+            canonical_id = slack_user.id
+            canonical_stmt = (
+                pg_insert(User)
+                .values(
+                    id=canonical_id,
+                    workspace_id=workspace_id,
+                    email=slack_user.email,
+                    display_name=slack_user.display_name,
+                    is_admin=slack_user.is_admin,
+                    is_active=slack_user.is_active,
+                )
+                .on_conflict_do_update(
+                    index_elements=[User.id],
+                    set_={
+                        "email": slack_user.email,
+                        "display_name": slack_user.display_name,
+                        "is_admin": slack_user.is_admin,
+                        "is_active": slack_user.is_active,
+                    },
+                )
+            )
+            await session.execute(canonical_stmt)
+            mapping_stmt = (
+                pg_insert(UserPlatformMapping)
+                .values(
+                    user_id=canonical_id,
+                    workspace_integration_id=integration_id,
+                    platform=Platform.SLACK,
+                    external_user_id=slack_id,
+                    external_email=slack_user.email,
+                    is_active=slack_user.is_active,
+                )
+                .on_conflict_do_update(
+                    constraint="uq_user_platform_external",
+                    set_={
+                        "external_email": slack_user.email,
+                        "is_active": slack_user.is_active,
+                    },
+                )
+            )
+            await session.execute(mapping_stmt)
+
+        # Single atomic commit: SlackUser + User + UserPlatformMapping
         await session.commit()
 
         if is_new:
-            await event_bus.publish(EventType.USER_JOINED, {
-                "slack_user_id": slack_id,
-                "display_name": values["display_name"],
-                "is_bot": values["is_bot"],
-            })
+            await event_bus.publish(
+                EventType.USER_JOINED,
+                normalized_payload(
+                    platform=Platform.SLACK,
+                    workspace_id=workspace_id,
+                    workspace_integration_id=integration_id,
+                    user_id=canonical_id,
+                    external_metadata={
+                        "user_id": slack_id,
+                        "display_name": values["display_name"],
+                        "is_bot": values["is_bot"],
+                    },
+                ),
+            )
 
         return is_new

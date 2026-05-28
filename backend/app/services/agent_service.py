@@ -11,8 +11,9 @@ This service bridges Slack events with the LangGraph agent. It:
 All agent interactions are logged but never stored with sensitive content.
 """
 
-import logging
 import json
+import logging
+import uuid
 from dataclasses import dataclass, field
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
@@ -66,6 +67,8 @@ class AgentService:
         channel_id: str | None = None,
         thread_ts: str | None = None,
         user_channel_ids: list[str] | None = None,
+        canonical_user_id: uuid.UUID | None = None,
+        workspace_id: uuid.UUID | None = None,
     ) -> AgentResponse:
         """
         Process a user message through the AI agent.
@@ -76,6 +79,8 @@ class AgentService:
             channel_id: The channel where the message was sent.
             thread_ts: Thread timestamp for threaded replies.
             user_channel_ids: List of channel IDs the user is a member of.
+            canonical_user_id: Internal user UUID, when mapped.
+            workspace_id: Internal workspace UUID, when mapped.
 
         Returns:
             AgentResponse with the agent's reply.
@@ -91,21 +96,62 @@ class AgentService:
             )
 
         # Log the incoming query
-        await event_bus.publish(EventType.AGENT_QUERY, {
-            "user_slack_id": user_slack_id,
-            "channel_id": channel_id,
-            "message_length": len(message),
-            "thread_ts": thread_ts,
-        })
+        await event_bus.publish(
+            EventType.AGENT_QUERY,
+            {
+                "schema_version": 1,
+                "platform": "slack",
+                "requesting_user_id": (
+                    str(canonical_user_id) if canonical_user_id else None
+                ),
+                "workspace_id": str(workspace_id) if workspace_id else None,
+                "user_slack_id": user_slack_id,
+                "channel_id": channel_id,
+                "message_length": len(message),
+                "thread_ts": thread_ts,
+                "external_metadata": {
+                    "user_id": user_slack_id,
+                    "channel_id": channel_id,
+                    "thread_ts": thread_ts,
+                },
+            },
+        )
 
         try:
             # Build a per-request graph with user-scoped tools
             # The graph creates tools that close over trusted ACL context
             from app.agent.graph import build_agent_graph
 
+            # Resolve canonical channel UUIDs when the caller is
+            # authenticated via OIDC (canonical_user_id is set).
+            canonical_channel_ids: list[uuid.UUID] | None = None
+            if canonical_user_id and workspace_id:
+                try:
+                    from sqlalchemy import or_, select
+
+                    from app.database import AsyncSessionLocal
+                    from app.models.membership import ChannelMembership
+
+                    async with AsyncSessionLocal() as session:
+                        conditions = [
+                            ChannelMembership.canonical_user_id == canonical_user_id,
+                        ]
+                        result = await session.execute(
+                            select(ChannelMembership.channel_id).where(
+                                ChannelMembership.workspace_id == workspace_id,
+                                ChannelMembership.is_active.is_(True),
+                                or_(*conditions),
+                            )
+                        )
+                        canonical_channel_ids = [row[0] for row in result.all()]
+                except Exception as e:
+                    logger.warning("Failed to resolve canonical channel IDs: %s", e)
+
             graph = build_agent_graph(
                 user_slack_id=user_slack_id,
                 user_channel_ids=user_channel_ids or [],
+                canonical_user_id=canonical_user_id,
+                canonical_channel_ids=canonical_channel_ids,
             )
 
             # Clean the message (remove bot mention)
@@ -119,6 +165,8 @@ class AgentService:
                 ],
                 "user_slack_id": user_slack_id,
                 "user_channel_ids": user_channel_ids or [],
+                "canonical_user_id": canonical_user_id,
+                "canonical_channel_ids": canonical_channel_ids,
             }
 
             # Invoke the agent graph
@@ -131,22 +179,45 @@ class AgentService:
 
             # Publish per-tool audit events
             for detail in tool_call_details:
-                await event_bus.publish(EventType.AGENT_TOOL_CALL, {
-                    "user_slack_id": user_slack_id,
-                    "tool_name": detail.tool_name,
-                    "tool_args": self._sanitize_args(detail.tool_args),
-                    "channel_id": channel_id,
-                    "model": f"{settings.llm_provider}/{settings.llm_model}",
-                })
+                await event_bus.publish(
+                    EventType.AGENT_TOOL_CALL,
+                    {
+                        "schema_version": 1,
+                        "platform": "slack",
+                        "requesting_user_id": (
+                            str(canonical_user_id) if canonical_user_id else None
+                        ),
+                        "workspace_id": str(workspace_id) if workspace_id else None,
+                        "user_slack_id": user_slack_id,
+                        "tool_name": detail.tool_name,
+                        "tool_args": self._sanitize_args(detail.tool_args),
+                        "channel_id": channel_id,
+                        "model": f"{settings.llm_provider}/{settings.llm_model}",
+                        "external_metadata": {
+                            "user_id": user_slack_id,
+                            "channel_id": channel_id,
+                        },
+                    },
+                )
 
             # Log the aggregate response
-            await event_bus.publish(EventType.AGENT_RESPONSE, {
-                "user_slack_id": user_slack_id,
-                "response_length": len(response_content),
-                "tool_calls_made": tool_calls,
-                "tools_used": [d.tool_name for d in tool_call_details],
-                "model": f"{settings.llm_provider}/{settings.llm_model}",
-            })
+            await event_bus.publish(
+                EventType.AGENT_RESPONSE,
+                {
+                    "schema_version": 1,
+                    "platform": "slack",
+                    "requesting_user_id": (
+                        str(canonical_user_id) if canonical_user_id else None
+                    ),
+                    "workspace_id": str(workspace_id) if workspace_id else None,
+                    "user_slack_id": user_slack_id,
+                    "response_length": len(response_content),
+                    "tool_calls_made": tool_calls,
+                    "tools_used": [d.tool_name for d in tool_call_details],
+                    "model": f"{settings.llm_provider}/{settings.llm_model}",
+                    "external_metadata": {"user_id": user_slack_id},
+                },
+            )
 
             return AgentResponse(
                 content=response_content,

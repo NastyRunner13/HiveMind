@@ -7,6 +7,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
 
+from app.models.identity import Platform
+
 
 class FileOwnerResponse(BaseModel):
     """Minimal owner info for file responses."""
@@ -25,6 +27,8 @@ class FileMetadataResponse(BaseModel):
 
     id: uuid.UUID
     slack_file_id: str
+    platform: Platform = Platform.SLACK
+    external_file_id: str | None = None
     filename: str
     title: str | None = None
     filetype: str
@@ -34,6 +38,7 @@ class FileMetadataResponse(BaseModel):
     shares_count: int = 1
     is_external: bool = False
     slack_created_at: datetime | None = None
+    external_created_at: datetime | None = None
     created_at: datetime
 
     # Nested info

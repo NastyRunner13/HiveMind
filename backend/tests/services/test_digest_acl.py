@@ -10,14 +10,13 @@ Verifies:
 """
 
 import uuid
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 # Check if asyncpg is available
 try:
-    import asyncpg
+    import asyncpg  # noqa: F401
 
     HAS_ASYNCPG = True
 except ImportError:
@@ -65,21 +64,13 @@ class TestPersonalizedDigestDoesNotStore:
         service = DigestService()
 
         with (
-            patch(
-                "app.services.membership_service.membership_service"
-            ) as mock_ms,
-            patch(
-                "app.services.digest_service.AsyncSessionLocal"
-            ) as mock_factory,
+            patch("app.services.membership_service.membership_service") as mock_ms,
+            patch("app.services.digest_service.AsyncSessionLocal") as mock_factory,
         ):
-            mock_ms.get_user_channel_ids = AsyncMock(
-                return_value=["C_PRIV_1"]
-            )
+            mock_ms.get_user_channel_ids = AsyncMock(return_value=["C_PRIV_1"])
 
             mock_session = AsyncMock()
-            mock_factory.return_value.__aenter__ = AsyncMock(
-                return_value=mock_session
-            )
+            mock_factory.return_value.__aenter__ = AsyncMock(return_value=mock_session)
             mock_factory.return_value.__aexit__ = AsyncMock(return_value=None)
 
             ws = _make_workspace()
@@ -91,9 +82,7 @@ class TestPersonalizedDigestDoesNotStore:
             ch_result = MagicMock()
             ch_result.scalars.return_value.all.return_value = [private_ch]
 
-            mock_session.execute = AsyncMock(
-                side_effect=[ws_result, ch_result]
-            )
+            mock_session.execute = AsyncMock(side_effect=[ws_result, ch_result])
 
             # Mock the new _generate_channel_summary_only method
             with patch.object(
@@ -121,21 +110,13 @@ class TestPersonalizedDigestDoesNotStore:
         service = DigestService()
 
         with (
-            patch(
-                "app.services.membership_service.membership_service"
-            ) as mock_ms,
-            patch(
-                "app.services.digest_service.AsyncSessionLocal"
-            ) as mock_factory,
+            patch("app.services.membership_service.membership_service") as mock_ms,
+            patch("app.services.digest_service.AsyncSessionLocal") as mock_factory,
         ):
-            mock_ms.get_user_channel_ids = AsyncMock(
-                return_value=["C_PRIV_1"]
-            )
+            mock_ms.get_user_channel_ids = AsyncMock(return_value=["C_PRIV_1"])
 
             mock_session = AsyncMock()
-            mock_factory.return_value.__aenter__ = AsyncMock(
-                return_value=mock_session
-            )
+            mock_factory.return_value.__aenter__ = AsyncMock(return_value=mock_session)
             mock_factory.return_value.__aexit__ = AsyncMock(return_value=None)
 
             ws = _make_workspace()
@@ -147,9 +128,7 @@ class TestPersonalizedDigestDoesNotStore:
             ch_result = MagicMock()
             ch_result.scalars.return_value.all.return_value = [private_ch]
 
-            mock_session.execute = AsyncMock(
-                side_effect=[ws_result, ch_result]
-            )
+            mock_session.execute = AsyncMock(side_effect=[ws_result, ch_result])
 
             with (
                 patch.object(
@@ -183,20 +162,12 @@ class TestSlackDigestCommandACL:
         mock_say = AsyncMock()
 
         with (
-            patch(
-                "app.slack.events.digest_service"
-            ),
-            patch(
-                "app.slack.events.membership_service"
-            ) as mock_ms,
-            patch(
-                "app.slack.events.AsyncSessionLocal"
-            ) as mock_factory,
+            patch("app.slack.events.digest_service"),
+            patch("app.slack.events.membership_service") as mock_ms,
+            patch("app.slack.events.AsyncSessionLocal") as mock_factory,
         ):
             mock_session = AsyncMock()
-            mock_factory.return_value.__aenter__ = AsyncMock(
-                return_value=mock_session
-            )
+            mock_factory.return_value.__aenter__ = AsyncMock(return_value=mock_session)
             mock_factory.return_value.__aexit__ = AsyncMock(return_value=None)
 
             ws = _make_workspace()
@@ -208,14 +179,10 @@ class TestSlackDigestCommandACL:
             ch_result = MagicMock()
             ch_result.scalar_one_or_none.return_value = private_ch
 
-            mock_session.execute = AsyncMock(
-                side_effect=[ws_result, ch_result]
-            )
+            mock_session.execute = AsyncMock(side_effect=[ws_result, ch_result])
 
             # User is NOT a member of the private channel
-            mock_ms.get_user_channel_ids = AsyncMock(
-                return_value=["C_OTHER"]
-            )
+            mock_ms.get_user_channel_ids = AsyncMock(return_value=["C_OTHER"])
 
             await _handle_digest_command(
                 clean_text="digest #secret-proj",
@@ -228,7 +195,10 @@ class TestSlackDigestCommandACL:
             # Should get denial message
             mock_say.assert_called()
             call_text = mock_say.call_args_list[-1].kwargs.get(
-                "text", mock_say.call_args_list[-1].args[0] if mock_say.call_args_list[-1].args else ""
+                "text",
+                mock_say.call_args_list[-1].args[0]
+                if mock_say.call_args_list[-1].args
+                else "",
             )
             assert "🔒" in call_text or "access" in call_text.lower()
 
@@ -240,20 +210,12 @@ class TestSlackDigestCommandACL:
         mock_say = AsyncMock()
 
         with (
-            patch(
-                "app.slack.events.digest_service"
-            ) as mock_digest_svc,
-            patch(
-                "app.slack.events.membership_service"
-            ) as mock_ms,
-            patch(
-                "app.slack.events.AsyncSessionLocal"
-            ) as mock_factory,
+            patch("app.slack.events.digest_service") as mock_digest_svc,
+            patch("app.slack.events.membership_service") as mock_ms,
+            patch("app.slack.events.AsyncSessionLocal") as mock_factory,
         ):
             mock_session = AsyncMock()
-            mock_factory.return_value.__aenter__ = AsyncMock(
-                return_value=mock_session
-            )
+            mock_factory.return_value.__aenter__ = AsyncMock(return_value=mock_session)
             mock_factory.return_value.__aexit__ = AsyncMock(return_value=None)
 
             ws = _make_workspace()
@@ -265,9 +227,7 @@ class TestSlackDigestCommandACL:
             ch_result = MagicMock()
             ch_result.scalar_one_or_none.return_value = private_ch
 
-            mock_session.execute = AsyncMock(
-                side_effect=[ws_result, ch_result]
-            )
+            mock_session.execute = AsyncMock(side_effect=[ws_result, ch_result])
 
             # User IS a member
             mock_ms.get_user_channel_ids = AsyncMock(
@@ -292,105 +252,83 @@ class TestSlackDigestCommandACL:
             # Should get the digest (not denial)
             mock_say.assert_called()
             # The last say call should contain the digest content
-            last_call_text = mock_say.call_args_list[-1].kwargs.get(
-                "text", ""
-            )
+            last_call_text = mock_say.call_args_list[-1].kwargs.get("text", "")
             assert "🔒" not in last_call_text
 
 
 @skip_without_asyncpg
 class TestDigestAPIACL:
-    """Fix 2: POST /generate should reject non-members for private channels."""
+    """Protected API uses canonical principals rather than Slack headers."""
 
     @pytest.mark.asyncio
     async def test_api_rejects_non_member_for_private_channel(self):
         """POST /generate for a private channel should return 403
         when the user is not a member."""
+        from fastapi import FastAPI, HTTPException
         from fastapi.testclient import TestClient
 
         from app.api.digests import router
-
-        from fastapi import FastAPI
+        from app.database import get_db
+        from app.security.auth import AuthenticatedPrincipal, get_current_principal
 
         app = FastAPI()
         app.include_router(router, prefix="/api/v1")
 
-        with (
-            patch("app.api.digests.AsyncSessionLocal") as mock_factory,
-            patch(
-                "app.services.membership_service.membership_service"
-            ) as mock_ms,
+        ws = _make_workspace()
+        private_ch = _make_channel("secret", "C_SECRET", "private")
+        mock_session = AsyncMock()
+        mock_session.get = AsyncMock(return_value=ws)
+        channel_result = MagicMock()
+        channel_result.scalar_one_or_none.return_value = private_ch
+        mock_session.execute = AsyncMock(return_value=channel_result)
+
+        async def override_db():
+            yield mock_session
+
+        async def override_principal():
+            return AuthenticatedPrincipal(
+                user_id=uuid.uuid4(),
+                workspace_id=ws.id,
+                email="attacker@example.com",
+                display_name="Attacker",
+                is_admin=False,
+            )
+
+        app.dependency_overrides[get_db] = override_db
+        app.dependency_overrides[get_current_principal] = override_principal
+        with patch(
+            "app.api.digests.require_channel_access",
+            new=AsyncMock(
+                side_effect=HTTPException(
+                    status_code=403, detail="Channel access denied"
+                )
+            ),
         ):
-            mock_session = AsyncMock()
-            mock_factory.return_value.__aenter__ = AsyncMock(
-                return_value=mock_session
-            )
-            mock_factory.return_value.__aexit__ = AsyncMock(return_value=None)
-
-            ws = _make_workspace()
-            private_ch = _make_channel("secret", "C_SECRET", "private")
-
-            ws_result = MagicMock()
-            ws_result.scalar_one_or_none.return_value = ws
-
-            ch_result = MagicMock()
-            ch_result.scalar_one_or_none.return_value = private_ch
-
-            mock_session.execute = AsyncMock(
-                side_effect=[ws_result, ch_result]
-            )
-
-            mock_ms.get_user_channel_ids = AsyncMock(
-                return_value=["C_OTHER"]
-            )
-
-            client = TestClient(app)
-            response = client.post(
+            response = TestClient(app).post(
                 "/api/v1/digests/generate",
                 json={"channel_name": "secret"},
-                headers={"X-Slack-User-Id": "U_ATTACKER"},
             )
-
-            assert response.status_code == 403
+        assert response.status_code == 403
 
     @pytest.mark.asyncio
-    async def test_api_rejects_missing_auth_for_private_channel(self):
-        """POST /generate for a private channel without X-Slack-User-Id
-        should return 403."""
+    async def test_slack_identity_header_is_not_api_authentication(self):
+        """A forged Slack header without a bearer token must not authorize."""
+        from fastapi import FastAPI
         from fastapi.testclient import TestClient
 
         from app.api.digests import router
-
-        from fastapi import FastAPI
+        from app.database import get_db
 
         app = FastAPI()
         app.include_router(router, prefix="/api/v1")
 
-        with patch("app.api.digests.AsyncSessionLocal") as mock_factory:
-            mock_session = AsyncMock()
-            mock_factory.return_value.__aenter__ = AsyncMock(
-                return_value=mock_session
-            )
-            mock_factory.return_value.__aexit__ = AsyncMock(return_value=None)
+        async def override_db():
+            yield AsyncMock()
 
-            ws = _make_workspace()
-            private_ch = _make_channel("secret", "C_SECRET", "private")
-
-            ws_result = MagicMock()
-            ws_result.scalar_one_or_none.return_value = ws
-
-            ch_result = MagicMock()
-            ch_result.scalar_one_or_none.return_value = private_ch
-
-            mock_session.execute = AsyncMock(
-                side_effect=[ws_result, ch_result]
-            )
-
-            client = TestClient(app)
-            response = client.post(
-                "/api/v1/digests/generate",
-                json={"channel_name": "secret"},
-                # No X-Slack-User-Id header
-            )
-
-            assert response.status_code == 403
+        app.dependency_overrides[get_db] = override_db
+        response = TestClient(app).post(
+            "/api/v1/digests/generate",
+            json={"channel_name": "secret"},
+            headers={"X-Slack-User-Id": "U_ATTACKER"},
+        )
+        assert response.status_code == 401

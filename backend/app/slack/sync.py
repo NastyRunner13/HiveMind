@@ -105,8 +105,7 @@ async def sync_channels(client: AsyncWebClient) -> dict:
                         stats["members_synced"] += 1
                     except Exception as e:
                         logger.warning(
-                            f"Failed to sync members for "
-                            f"{channel_data.get('id')}: {e}"
+                            f"Failed to sync members for {channel_data.get('id')}: {e}"
                         )
             except Exception as e:
                 logger.error(

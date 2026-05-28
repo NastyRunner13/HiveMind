@@ -103,9 +103,7 @@ class DocumentChunk(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         index=True,
     )
 
-    chunk_index: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=0
-    )
+    chunk_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     # ── Content ──────────────────────────────────────────────────
     content: Mapped[str] = mapped_column(Text, nullable=False)
@@ -116,9 +114,7 @@ class DocumentChunk(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         nullable=True,  # Null until embedding is generated
     )
 
-    token_count: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=0
-    )
+    token_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     # ── ACL Metadata ─────────────────────────────────────────────
     # These fields enable DB-level filtering in vector search queries
@@ -137,16 +133,27 @@ class DocumentChunk(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         ARRAY(String(32)),
         nullable=True,
     )
+    allowed_channel_uuids: Mapped[list[uuid.UUID] | None] = mapped_column(
+        ARRAY(UUID(as_uuid=True)),
+        nullable=True,
+    )
 
     # Slack user IDs with explicit access (DMs, private shares)
     allowed_user_ids: Mapped[list[str] | None] = mapped_column(
         ARRAY(String(32)),
         nullable=True,
     )
+    allowed_user_uuids: Mapped[list[uuid.UUID] | None] = mapped_column(
+        ARRAY(UUID(as_uuid=True)),
+        nullable=True,
+    )
 
     # The channel this content originated from (for membership checks)
     source_channel_id: Mapped[str | None] = mapped_column(
         String(32), nullable=True, index=True
+    )
+    source_channel_uuid: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True, index=True
     )
 
     confidentiality: Mapped[Confidentiality] = mapped_column(

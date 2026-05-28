@@ -20,8 +20,8 @@ Reliability:
 """
 
 import asyncio
-import json
 import logging
+import uuid
 
 from sqlalchemy import select
 
@@ -40,6 +40,51 @@ CONSUMER_NAME = "indexer-main"
 STREAM_NAME = "hivemind-events"
 
 
+async def _load_message_context(
+    session, data: dict
+) -> tuple[Channel | None, Message | None]:
+    """Load normalized events by UUID, with a legacy Slack-event fallback."""
+    internal_channel_id = data.get("channel_id")
+    internal_message_id = data.get("message_id")
+    if internal_channel_id and internal_message_id:
+        try:
+            channel_id = uuid.UUID(str(internal_channel_id))
+            message_id = uuid.UUID(str(internal_message_id))
+        except ValueError:
+            logger.warning("Message event contains invalid internal UUIDs: %s", data)
+            return None, None
+
+        channel = await session.get(Channel, channel_id)
+        message = await session.get(Message, message_id)
+        if not channel or not message or message.channel_id != channel.id:
+            logger.warning(
+                "Message event references unknown or mismatched entities: %s", data
+            )
+            return None, None
+        return channel, message
+
+    slack_channel_id = data.get("slack_channel_id")
+    slack_message_ts = data.get("slack_message_ts")
+    if not slack_channel_id or not slack_message_ts:
+        return None, None
+
+    channel_result = await session.execute(
+        select(Channel).where(Channel.slack_channel_id == slack_channel_id)
+    )
+    channel = channel_result.scalar_one_or_none()
+    if not channel:
+        logger.warning("Channel %s not found for indexing", slack_channel_id)
+        return None, None
+
+    message_result = await session.execute(
+        select(Message).where(
+            Message.channel_id == channel.id,
+            Message.slack_message_ts == slack_message_ts,
+        )
+    )
+    return channel, message_result.scalar_one_or_none()
+
+
 async def _process_message_ingested(event_data: dict) -> None:
     """
     Process a MESSAGE_INGESTED event by indexing the message
@@ -55,13 +100,21 @@ async def _process_message_ingested(event_data: dict) -> None:
     from app.services.knowledge_service import knowledge_service
 
     data = event_data.get("data", {})
+    if data.get("channel_id") and data.get("message_id"):
+        async with AsyncSessionLocal() as session:
+            channel, message = await _load_message_context(session, data)
+        if not channel or not message:
+            return
+        if await knowledge_service.is_already_indexed(message.id):
+            return
+        await knowledge_service.index_message(message=message, channel=channel)
+        return
+
     slack_channel_id = data.get("slack_channel_id")
     slack_message_ts = data.get("slack_message_ts")
 
     if not slack_channel_id or not slack_message_ts:
-        logger.warning(
-            f"MESSAGE_INGESTED event missing required fields: {data}"
-        )
+        logger.warning(f"MESSAGE_INGESTED event missing required fields: {data}")
         return
 
     async with AsyncSessionLocal() as session:
@@ -74,9 +127,7 @@ async def _process_message_ingested(event_data: dict) -> None:
         channel = ch_result.scalar_one_or_none()
 
         if not channel:
-            logger.warning(
-                f"Channel {slack_channel_id} not found for indexing"
-            )
+            logger.warning(f"Channel {slack_channel_id} not found for indexing")
             return
 
         # Find the message — use channel_id to prevent cross-channel
@@ -102,9 +153,7 @@ async def _process_message_ingested(event_data: dict) -> None:
 
     # Idempotency check — skip if already indexed
     if await knowledge_service.is_already_indexed(message.id):
-        logger.debug(
-            f"Message {message.id} already indexed — skipping"
-        )
+        logger.debug(f"Message {message.id} already indexed — skipping")
         return
 
     # Index the message
@@ -114,8 +163,7 @@ async def _process_message_ingested(event_data: dict) -> None:
         )
         if chunks_created > 0:
             logger.info(
-                f"Indexed message {message.id}: "
-                f"{chunks_created} chunks created"
+                f"Indexed message {message.id}: {chunks_created} chunks created"
             )
     except Exception as e:
         logger.error(
@@ -135,6 +183,15 @@ async def _process_message_edited(event_data: dict) -> None:
     from app.services.knowledge_service import knowledge_service
 
     data = event_data.get("data", {})
+    if data.get("channel_id") and data.get("message_id"):
+        async with AsyncSessionLocal() as session:
+            channel, message = await _load_message_context(session, data)
+        if not channel or not message:
+            return
+        await knowledge_service.delete_chunks_for_source(message.id)
+        await knowledge_service.index_message(message=message, channel=channel)
+        return
+
     slack_channel_id = data.get("slack_channel_id")
     slack_message_ts = data.get("slack_message_ts")
 
@@ -167,9 +224,7 @@ async def _process_message_edited(event_data: dict) -> None:
 
     # Delete old chunks and re-index
     try:
-        deleted = await knowledge_service.delete_chunks_for_source(
-            message.id
-        )
+        deleted = await knowledge_service.delete_chunks_for_source(message.id)
         if deleted > 0:
             logger.debug(
                 f"Deleted {deleted} old chunks for edited message {message.id}"
@@ -180,8 +235,7 @@ async def _process_message_edited(event_data: dict) -> None:
         )
         if chunks_created > 0:
             logger.info(
-                f"Re-indexed edited message {message.id}: "
-                f"{chunks_created} chunks"
+                f"Re-indexed edited message {message.id}: {chunks_created} chunks"
             )
     except Exception as e:
         logger.error(
@@ -261,9 +315,7 @@ async def start_knowledge_consumer() -> None:
             min_idle_ms=60_000,
         )
         if pending:
-            logger.info(
-                f"Reclaiming {len(pending)} stranded pending messages"
-            )
+            logger.info(f"Reclaiming {len(pending)} stranded pending messages")
             for event in pending:
                 await _process_event(event)
 

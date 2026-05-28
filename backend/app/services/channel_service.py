@@ -7,7 +7,7 @@ Used by the API layer for channel-related endpoints.
 
 import uuid
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.channel import Channel, ChannelType
@@ -19,6 +19,8 @@ async def list_channels(
     page_size: int = 50,
     channel_type: ChannelType | None = None,
     include_archived: bool = False,
+    workspace_id: uuid.UUID | None = None,
+    member_channel_ids: list[uuid.UUID] | None = None,
 ) -> tuple[list[Channel], int]:
     """
     List channels with pagination and filtering.
@@ -30,6 +32,13 @@ async def list_channels(
     count_query = select(func.count(Channel.id))
 
     # Apply filters
+    if workspace_id:
+        visible = Channel.channel_type == ChannelType.PUBLIC
+        if member_channel_ids:
+            visible = or_(visible, Channel.id.in_(member_channel_ids))
+        query = query.where(Channel.workspace_id == workspace_id, visible)
+        count_query = count_query.where(Channel.workspace_id == workspace_id, visible)
+
     if not include_archived:
         query = query.where(Channel.is_archived.is_(False))
         count_query = count_query.where(Channel.is_archived.is_(False))
@@ -53,10 +62,15 @@ async def list_channels(
 
 
 async def get_channel_by_id(
-    session: AsyncSession, channel_id: uuid.UUID
+    session: AsyncSession,
+    channel_id: uuid.UUID,
+    workspace_id: uuid.UUID | None = None,
 ) -> Channel | None:
     """Get a single channel by its internal UUID."""
-    result = await session.execute(select(Channel).where(Channel.id == channel_id))
+    query = select(Channel).where(Channel.id == channel_id)
+    if workspace_id:
+        query = query.where(Channel.workspace_id == workspace_id)
+    result = await session.execute(query)
     return result.scalar_one_or_none()
 
 

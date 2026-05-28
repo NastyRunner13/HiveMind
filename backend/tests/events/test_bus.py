@@ -9,13 +9,9 @@ Tests cover:
 """
 
 import json
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 
-import pytest
-
 from app.events.bus import EventBus, EventType
-
 
 # ═════════════════════════════════════════════════════════════════
 # CONNECTION LIFECYCLE
@@ -143,7 +139,9 @@ class TestStreamInfo:
         info = await bus.get_stream_info()
         assert info == {"connected": False}
 
-    async def test_get_stream_info_handles_missing_stream(self, mock_event_bus, mock_redis):
+    async def test_get_stream_info_handles_missing_stream(
+        self, mock_event_bus, mock_redis
+    ):
         """Stream info handles non-existent streams gracefully."""
         from redis.asyncio import ResponseError
 

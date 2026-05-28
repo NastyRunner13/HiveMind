@@ -34,6 +34,23 @@ services:
       timeout: 5s
       retries: 5
 
+  keycloak:
+    image: quay.io/keycloak/keycloak:25.0
+    container_name: hivemind-keycloak
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      KC_HTTP_ENABLED: "true"
+      KC_HOSTNAME_STRICT: "false"
+    command: start-dev
+    # After first start, create a realm "hivemind" and a client
+    # with the same name via the admin console at http://localhost:8080
+
 volumes:
   pgdata:
     driver: local

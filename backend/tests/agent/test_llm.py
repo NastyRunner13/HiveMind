@@ -13,7 +13,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-
 # ═════════════════════════════════════════════════════════════════
 # PROVIDER VALIDATION
 # ═════════════════════════════════════════════════════════════════
@@ -25,6 +24,7 @@ class TestProviderValidation:
     def setup_method(self):
         """Reset LLM cache before each test."""
         from app.agent.llm import reset_llm
+
         reset_llm()
 
     def test_unsupported_provider_raises(self):
@@ -35,7 +35,8 @@ class TestProviderValidation:
                 llm_api_key="key",
             )
 
-            from app.agent.llm import reset_llm, get_llm
+            from app.agent.llm import get_llm, reset_llm
+
             reset_llm()
 
             with pytest.raises(ValueError, match="Unsupported LLM provider"):
@@ -49,7 +50,8 @@ class TestProviderValidation:
                 llm_api_key="",
             )
 
-            from app.agent.llm import reset_llm, get_llm
+            from app.agent.llm import get_llm, reset_llm
+
             reset_llm()
 
             with pytest.raises(ValueError, match="OpenAI requires LLM_API_KEY"):
@@ -63,7 +65,8 @@ class TestProviderValidation:
                 llm_api_key="",
             )
 
-            from app.agent.llm import reset_llm, get_llm
+            from app.agent.llm import get_llm, reset_llm
+
             reset_llm()
 
             with pytest.raises(ValueError, match="Google Gemini requires LLM_API_KEY"):
@@ -77,7 +80,8 @@ class TestProviderValidation:
                 llm_api_key="",
             )
 
-            from app.agent.llm import reset_llm, get_llm
+            from app.agent.llm import get_llm, reset_llm
+
             reset_llm()
 
             with pytest.raises(ValueError, match="Anthropic requires LLM_API_KEY"):
@@ -92,7 +96,8 @@ class TestProviderValidation:
                 llm_base_url="",
             )
 
-            from app.agent.llm import reset_llm, get_llm
+            from app.agent.llm import get_llm, reset_llm
+
             reset_llm()
 
             with pytest.raises(ValueError, match="OpenRouter requires LLM_API_KEY"):
@@ -107,7 +112,8 @@ class TestProviderValidation:
                 llm_temperature=0.3,
             )
 
-            from app.agent.llm import reset_llm, get_llm
+            from app.agent.llm import get_llm, reset_llm
+
             reset_llm()
 
             # Should not raise — Ollama doesn't need a key
@@ -125,6 +131,7 @@ class TestLLMCache:
 
     def setup_method(self):
         from app.agent.llm import reset_llm
+
         reset_llm()
 
     def test_get_llm_returns_same_instance(self):
@@ -137,6 +144,7 @@ class TestLLMCache:
             )
 
             from app.agent.llm import get_llm
+
             llm1 = get_llm()
             llm2 = get_llm()
             assert llm1 is llm2
@@ -151,6 +159,7 @@ class TestLLMCache:
             )
 
             from app.agent.llm import get_llm, reset_llm
+
             llm1 = get_llm()
             reset_llm()
             llm2 = get_llm()
@@ -166,7 +175,8 @@ class TestLLMCache:
                 llm_temperature=0.3,
             )
 
-            from app.agent.llm import reset_llm, get_llm
+            from app.agent.llm import get_llm, reset_llm
+
             reset_llm()
             llm = get_llm()
             assert llm is not None
@@ -182,6 +192,7 @@ class TestOpenRouterProvider:
 
     def setup_method(self):
         from app.agent.llm import reset_llm
+
         reset_llm()
 
     def test_openrouter_creates_with_defaults(self):
@@ -197,6 +208,7 @@ class TestOpenRouterProvider:
             )
 
             from app.agent.llm import get_llm
+
             llm = get_llm()
             assert llm is not None
 
@@ -213,5 +225,6 @@ class TestOpenRouterProvider:
             )
 
             from app.agent.llm import get_llm
+
             llm = get_llm()
             assert llm is not None

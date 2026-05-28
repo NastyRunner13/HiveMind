@@ -8,15 +8,14 @@ Verifies that:
 - Sensitive arguments are truncated in audit logs
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-
 # Check if asyncpg is available (needed by app.database → agent_service)
 try:
-    import asyncpg
+    import asyncpg  # noqa: F401
 
     HAS_ASYNCPG = True
 except ImportError:
@@ -209,7 +208,7 @@ class TestAuditEventPublishing:
             mock_settings.is_development = False
             mock_bus.publish = AsyncMock()
 
-            response = await service.process_message(
+            await service.process_message(
                 user_slack_id="U_TEST",
                 message="search for auth",
                 channel_id="C_TEST",

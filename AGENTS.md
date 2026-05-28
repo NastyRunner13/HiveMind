@@ -47,12 +47,16 @@ HiveMind/
 │   │   │   ├── health.py     # Health check endpoint
 │   │   │   ├── channels.py   # Channel CRUD
 │   │   │   ├── messages.py   # Message queries
-│   │   │   ├── knowledge.py  # Semantic search (ACL via X-Slack-User-Id header)
+│   │   │   ├── knowledge.py  # Semantic search (ACL via authenticated principal)
 │   │   │   ├── digests.py    # Digest generation & listing
 │   │   │   └── router.py     # Route aggregator
 │   │   ├── events/           # Redis Streams event bus
 │   │   │   ├── bus.py        # EventBus with publish/subscribe
+│   │   │   ├── contracts.py  # Versioned platform-neutral payload contracts
 │   │   │   └── consumers.py  # Background consumers (knowledge indexing)
+│   │   ├── integrations/     # Platform connector boundary
+│   │   │   ├── base.py       # BasePlatformConnector protocol + DTOs
+│   │   │   └── slack/        # Slack connector compatibility adapter
 │   │   ├── models/           # SQLAlchemy ORM models (source of truth)
 │   │   │   ├── base.py       # Base model with UUID + timestamps
 │   │   │   ├── workspace.py  # Slack workspace
@@ -62,8 +66,10 @@ HiveMind/
 │   │   │   ├── file_metadata.py # File metadata index
 │   │   │   ├── embedding.py  # DocumentChunk with pgvector + ACL
 │   │   │   ├── digest.py     # Generated channel summaries
+│   │   │   ├── identity.py   # Canonical users/platform/auth mappings
 │   │   │   └── membership.py # Channel membership for ACL enforcement
 │   │   ├── schemas/          # Pydantic request/response schemas
+│   │   ├── security/         # OIDC authentication (Keycloak / Auth0 / any provider)
 │   │   ├── services/         # Business logic (testable, no HTTP dependency)
 │   │   │   ├── ingestion.py  # Slack event → DB pipeline + event bus
 │   │   │   ├── embedding_service.py  # Text chunking + embedding
@@ -102,6 +108,8 @@ HiveMind/
 │   ├── requirements.txt
 │   └── .env.example
 ├── docker-compose.yml        # PostgreSQL + pgvector + Redis dev infrastructure
+├── tasks/                    # Task tracking (completed work, roadmap, status map)
+├── concepts/                 # Product vision and concept documents
 ├── README.md
 ├── CONTRIBUTING.md
 └── .gitignore
@@ -141,6 +149,7 @@ API Routes (thin) → Services (business logic) → Models (database)
 - **Indexes**: Add indexes on columns used for lookups (e.g., `slack_id`)
 - **Migrations**: Always generate via `alembic revision --autogenerate`
 - **Enums**: Always specify `values_callable=lambda x: [e.value for e in x]` in `sa.Enum` columns to map Python Enums using their lowercase string values (avoiding `InvalidTextRepresentationError` mismatches with native PostgreSQL enum definitions).
+- **Transaction atomicity**: Multi-table upserts (e.g., `SlackUser` → `User` → `UserPlatformMapping` in `ingest_user()`) must use a single `session.commit()` at the end. Use `session.flush()` between upserts to get persisted rows without closing the transaction. This prevents orphaned records when a downstream upsert fails (e.g., canonical `User` is never created but `SlackUser` is already committed).
 
 ### 4. Configuration
 
@@ -262,6 +271,7 @@ HiveMind handles sensitive team data. These rules are non-negotiable:
 | `tiktoken` | Token counting for text chunking |
 | `redis[hiredis]` | Event bus (Redis Streams) + cache |
 | `apscheduler` | Cron-like async scheduling |
+| `PyJWT[crypto]` | OIDC bearer token signature/claim validation (Keycloak, Auth0, etc.) |
 | `pytest` | Test framework |
 | `pytest-asyncio` | Async test support |
 | `sentence-transformers` | Local embedding models (default: all-MiniLM-L6-v2, 384 dimensions) |
@@ -287,139 +297,37 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for full details. Quick reference:
 
 ---
 
-## Current State (What's Been Built)
+## Current State & Roadmap
 
-### Foundation (Milestone 1 — Complete)
+> **Detailed task tracking has been moved to the [`tasks/`](tasks/) directory.** This section is a compact summary for quick orientation.
 
-| Component | Status | Notes |
-|-----------|--------|-------|
-| FastAPI app with lifespan | ✅ Complete | `app/main.py` — manages DB, Redis, Slack, Scheduler lifecycle |
-| Settings / config | ✅ Complete | `app/config.py` — Redis, LLM, Embedding, Digest settings |
-| Async database engine | ✅ Complete | `app/database.py` |
-| Models: User, Channel, Message, FileMetadata, Workspace | ✅ Complete | `app/models/` |
-| Pydantic schemas | ✅ Complete | `app/schemas/` |
-| Alembic initial migration | ✅ Complete | `alembic/versions/0001_initial_schema.py` |
-| Slack bot (Socket Mode) | ✅ Complete | `app/slack/bot.py` |
-| Slack event handlers | ✅ Complete | `app/slack/events.py` — @mentions route through AI agent |
-| Slack historical sync | ✅ Complete | `app/slack/sync.py` |
-| Ingestion service | ✅ Complete | `app/services/ingestion.py` — publishes events to Redis |
-| API: health, channels, messages | ✅ Complete | `app/api/` |
-| Docker Compose (PostgreSQL) | ✅ Complete | `docker-compose.yml` |
-| **Slack unit tests** (44 tests) | ✅ Complete | `tests/slack/` — expected to pass in CI; verify locally after venv recreation |
-| **Slack live integration tests** (7 tests) | ✅ Complete | `tests/slack/test_live.py` |
-| **Slack API connectivity** | ✅ Verified | Bot token, read/write, channels/users all working |
-| CI/CD pipeline | ✅ Complete | `.github/workflows/ci.yml` — lint, test, Docker build |
+### What's Built (Milestones 1–4 Complete)
 
-### Core Intelligence (Milestone 2 — Complete)
+| Milestone | Summary | Test Count |
+|-----------|---------|------------|
+| **M1: Foundation** | FastAPI + Slack bot + ingestion + CI pipeline | 44 Slack unit + 7 live |
+| **M2: Core Intelligence** | Redis event bus + pgvector knowledge fabric + LangGraph agent + daily digest + APIs | — |
+| **M3: Security & Indexing** | Semantic indexing consumer + channel memberships + ACL-scoped agent tools + safe digests + embedding safety | 53 |
+| **M4: Multi-Platform Foundation** | OIDC auth + canonical identities + protected APIs + connector boundary + normalized events | — |
+| **Total non-live tests** | **209 passing** (May 28, 2026) | |
 
-| Component | Status | Notes |
-|-----------|--------|-------|
-| **Redis Event Bus** | ✅ Complete | `app/events/bus.py` — Redis Streams publish/subscribe |
-| **Knowledge Fabric (pgvector)** | ✅ Complete | `app/models/embedding.py`, `app/services/knowledge_service.py` |
-| **Embedding Service** | ✅ Complete | `app/services/embedding_service.py` — local sentence-transformers (384 dims) |
-| **AI Agent (LangGraph)** | ✅ Complete | `app/agent/` — ReAct agent with 5 ACL-scoped tools |
-| **Daily Digest** | ✅ Complete | `app/services/digest_service.py`, `app/services/scheduler.py` — public-only, source-channel delivery |
-| **Knowledge API** | ✅ Complete | `POST /api/v1/knowledge/search`, `GET /api/v1/knowledge/status` |
-| **Digest API** | ✅ Complete | `POST /api/v1/digests/generate`, `GET /api/v1/digests` |
-| **Alembic migration 0002** | ✅ Complete | pgvector extension + `document_chunks` + `digests` tables |
-| **Docker Compose** | ✅ Complete | Added Redis 7, switched to `pgvector/pgvector:pg16` |
-| **CI pipeline** | ✅ Complete | pgvector image + Redis service in CI |
+For detailed component-by-component breakdown, see [`tasks/completed.md`](tasks/completed.md).
 
-### Security & Indexing (Milestone 3 — Complete, 174 tests passing)
+### What's Next
 
-| Component | Status | Notes |
-|-----------|--------|-------|
-| **Semantic indexing consumer** | ✅ Complete | `app/events/consumers.py` — Redis Streams consumer for `MESSAGE_INGESTED` and `MESSAGE_EDITED` events, launched as asyncio task in `main.py` lifespan |
-| **Idempotent indexing** | ✅ Complete | `knowledge_service.is_already_indexed()` + `delete_chunks_for_source()` for re-indexing |
-| **`channel_memberships` table** | ✅ Complete | `app/models/membership.py` + Alembic migration `0003` — denormalized Slack IDs for O(1) ACL lookups |
-| **Membership service** | ✅ Complete | `app/services/membership_service.py` — real-time join/leave events + bulk sync + daily cron |
-| **Server-derived ACL context** | ✅ Complete | `app_mention` handler resolves memberships server-side; Knowledge API uses `X-Slack-User-Id` header, no client-supplied ACL |
-| **ACL-scoped agent tools** | ✅ Complete | `app/agent/tools.py` — `create_tools(user_slack_id, user_channel_ids)` factory returns closures; LLM cannot control ACL params |
-| **Per-request agent graph** | ✅ Complete | `app/agent/graph.py` — `build_agent_graph(user_slack_id, user_channel_ids)` creates scoped tools per request |
-| **Safe digests** | ✅ Complete | `digest_service.generate_daily_digest()` filters to `PUBLIC` channels only; `deliver_to_slack()` posts to source channel |
-| **Personalized digests** | ✅ Complete | `digest_service.generate_personalized_digest()` — on-demand, includes private channels user is member of. Triggered via agent tool (`personalized=True`) or `@HiveMind digest --me` |
-| **Per-tool audit logging** | ✅ Complete | `agent_service._extract_tool_call_details()` + `AGENT_TOOL_CALL` events published per tool invocation with user, tool name, args, and channel |
-| **Embedding dimension safety** | ✅ Complete | `config.validate_embedding_dimensions()` — startup validation blocks boot if `EMBEDDING_DIMENSIONS != SCHEMA_EMBEDDING_DIMENSIONS` |
-| **Scheduler decoupling** | ✅ Complete | Scheduler starts unconditionally in `main.py` — membership sync always runs, digest job guarded by `digest_enabled` |
-| **Membership sync events** | ✅ Complete | `member_joined_channel` / `member_left_channel` handlers in `app/slack/events.py` |
-| **Daily membership cron** | ✅ Complete | Scheduler runs `full_sync_all_channels` at 03:00 as safety net |
-| **Security tests** | ✅ Complete | 7 tests in `tests/agent/test_tool_security.py` — no exposed ACL params, private channel denial, negative tests |
-| **Audit logging tests** | ✅ Complete | 10 tests in `tests/agent/test_agent_audit.py` — tool call extraction, arg sanitization, event publishing |
-| **Consumer tests** | ✅ Complete | 5 tests in `tests/events/test_consumers.py` — indexing, idempotency, missing fields, re-indexing |
-| **Membership tests** | ✅ Complete | 7 tests in `tests/services/test_membership_service.py` — join/leave, bulk sync, edge cases |
-| **Personalized digest tests** | ✅ Complete | 5 tests in `tests/services/test_personalized_digest.py` — membership lookup, private channel inclusion, edge cases |
-| **Embedding safety tests** | ✅ Complete | 5 tests in `tests/services/test_embedding_dimension_safety.py` — match/mismatch validation, error messages |
-| **Scheduler tests** | ✅ Complete | 9 tests in `tests/services/test_scheduler.py` — lifecycle, digest job, membership sync, decoupling |
+| Priority | Work Item | Details |
+|----------|-----------|---------|
+| **P0** | Run Alembic migration `0004` against PostgreSQL + pgvector | Canonical identity schema, pending verification |
+| **P0** | Run Slack live regression tests | Verify behavior unchanged post-connector |
+| **P1** | Complete Slack internal canonical cutover | Remove remaining compatibility lookups |
+| **P1** | Remove legacy event fallback | After queue drain + Slack/Teams parity |
+| **P2** | Microsoft Graph Teams connector | First additional platform |
+| **P2** | Planner/OneDrive + OBO file access | After normalized Slack+Teams ingestion |
+| **P2** | Feature expansion: Tasks, Nudges, Onboarding, KT | See concept §3, §5, §7, §8 |
+| **Phase 2** | Self-Improving Skills Engine | After real-user Phase 1 stability |
 
----
-
-## What's Next (Upcoming Work)
-
-> **See [IMPLEMENTATION_REVIEW.md](IMPLEMENTATION_REVIEW.md) for the full gap analysis.** The priorities below are derived from that review, cross-referenced against `concepts/hivemind_concept_v3.md`.
-
-### P0: Fix Local Verification
-
-1. **Recreate local Python environment** — `backend/.venv` is broken (points to missing Python 3.12 install on Windows)
-2. **Install dependencies** — `pip install -r requirements.txt`
-3. **Run unit tests** — verify all tests pass locally before claiming CI-green
-4. **Run Alembic migrations** — `alembic upgrade head` against local PostgreSQL with pgvector (now includes migration `0003` for `channel_memberships`)
-5. **Fix Docker healthcheck** — Dockerfile points to `/api/v1/health` but app serves `/health`; update Docker to use `/health`
-
-### ~~P0: Wire Semantic Indexing End-to-End~~ ✅ DONE
-
-~~6. Add event consumer for `MESSAGE_INGESTED`~~ → `app/events/consumers.py` — Redis Streams consumer with event router
-~~7. Make indexing idempotent~~ → `knowledge_service.is_already_indexed()` + `delete_chunks_for_source()`
-~~8. Add integration test~~ → 5 tests in `tests/events/test_consumers.py`
-
-### ~~P0: Make ACL Context Trustworthy~~ ✅ DONE
-
-~~9. Add `channel_memberships` table~~ → `app/models/membership.py` + migration `0003`
-~~10. Derive user/channel access server-side~~ → `app_mention` handler calls `membership_service.get_user_channel_ids()`
-~~11. Remove client-supplied ACL authority~~ → Knowledge API uses `X-Slack-User-Id` header, no query param spoofing
-~~12. Add negative tests~~ → 7 security tests in `tests/agent/test_tool_security.py`
-
-### ~~P1: Lock Down Agent Tools~~ ✅ DONE
-
-~~13. Inject trusted user context into tools~~ → `create_tools(user_slack_id, user_channel_ids)` closure factory
-~~14. Apply ACL checks in all data-accessing tools~~ → All 5 tools check `user_channel_ids` for private channels
-~~15. Log tool calls~~ → ✅ `agent_service._extract_tool_call_details()` walks LangGraph message history; `AGENT_TOOL_CALL` events published per tool invocation with user, tool name, args, and channel. Arg values truncated via `_sanitize_args()`. Tests in `tests/agent/test_agent_audit.py`.
-
-### ~~P1: Make Digests Safe~~ ✅ DONE
-
-~~16. Skip private channels in global digests~~ → `generate_daily_digest()` filters to `ChannelType.PUBLIC`
-~~17. Post channel digests only to their source channel~~ → `deliver_to_slack()` resolves source channel first
-~~18. Build personalized digests~~ → ✅ `digest_service.generate_personalized_digest(user_slack_id)` — on-demand only, queries user's channel memberships via `membership_service`, generates combined digest across all accessible channels (public + private). Triggered via agent tool (`personalized=True`) or `@HiveMind digest --me`. No cron, no pre-generation, no DB storage — returned directly. Tests in `tests/services/test_personalized_digest.py`.
-
-### ~~P1: Embedding Dimension Safety~~ ✅ DONE
-
-~~19. Treat embedding dimension as a schema-level decision~~ → ✅ Added `SCHEMA_EMBEDDING_DIMENSIONS` setting in `config.py`. `validate_embedding_dimensions()` method compares runtime `EMBEDDING_DIMENSIONS` against `SCHEMA_EMBEDDING_DIMENSIONS` and raises `SystemExit` with clear migration instructions on mismatch. Validated at startup in `main.py`.
-~~20. Document the current default~~ → ✅ Updated `embedding.py` model docstring, `.env.example` with comprehensive comments, and `config.py` inline docs. Local: sentence-transformers (all-MiniLM-L6-v2, 384 dims). OpenAI: text-embedding-3-small (1536 dims, requires migration). Tests in `tests/services/test_embedding_dimension_safety.py`.
-
-### ~~P1: Minor Issues Found During Review~~ ✅ DONE
-
-~~21. Decouple membership sync from digest scheduler~~ → ✅ Removed `if settings.digest_enabled:` guard from `main.py`. Scheduler now starts unconditionally — membership sync cron always runs, digest job is guarded internally by `digest_enabled`. Updated `scheduler.py` docstring. Tests in `tests/services/test_scheduler.py`.
-~~22. Add per-tool audit logging~~ → ✅ Same as item #15. `AGENT_TOOL_CALL` events + `tools_used` list in `AGENT_RESPONSE` event.
-
-### P2: Prepare for Multi-Platform Support (Future)
-
-23. **Add `Platform` enum** — `SLACK`, `TEAMS`, `DISCORD`, `EMAIL`, `JIRA`, `NOTION`
-24. **Add platform-neutral internal entities** — abstract users, channels, messages with UUID-based internal IDs
-25. **Add platform mapping tables** — `user_platform_mappings`, `workspace_integrations`
-26. **Move Slack code under `integrations/slack/`** — keep new integrations behind adapter interfaces
-
-### P2: Phase 1 Feature Expansion (After Core is Solid)
-
-27. ~~**Personalized digests**~~ → ✅ Moved to P1 and completed (item #18)
-28. **Task & Action Management** — Planner/Jira integration (see concept §3)
-29. **Proactive Nudges** — scheduled behaviors and triggers (see concept §8)
-30. **Onboarding Flow** — new team member knowledge transfer (see concept §5)
-31. **Knowledge Transfer Engine** — project KT generation (see concept §7)
-
-### Phase 2 (Future — After Phase 1 is Stable with Real Users)
-
-32. **Self-Improving Skills Engine** — workflow pattern detection from event bus traces
-33. **Skill Crystallization** — convert detected patterns into reusable, versioned skills
-34. **Prerequisites**: Active users on Phase 1, Event Bus logging traces, stable core features, RBAC fully functional
+For the full roadmap with checkboxes, see [`tasks/roadmap.md`](tasks/roadmap.md).
+For a feature-by-feature status map against the concept doc, see [`tasks/status.md`](tasks/status.md).
 
 ---
 

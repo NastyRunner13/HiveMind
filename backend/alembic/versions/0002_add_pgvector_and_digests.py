@@ -117,7 +117,9 @@ def upgrade() -> None:
             server_default=sa.func.now(),
         ),
     )
-    op.create_index("ix_document_chunks_workspace_id", "document_chunks", ["workspace_id"])
+    op.create_index(
+        "ix_document_chunks_workspace_id", "document_chunks", ["workspace_id"]
+    )
     op.create_index("ix_document_chunks_source_id", "document_chunks", ["source_id"])
     op.create_index(
         "ix_document_chunks_source_channel_id",
@@ -154,7 +156,9 @@ def upgrade() -> None:
             sa.ForeignKey("channels.id", ondelete="SET NULL"),
             nullable=True,
         ),
-        sa.Column("digest_type", digest_type_enum, nullable=False, server_default="daily"),
+        sa.Column(
+            "digest_type", digest_type_enum, nullable=False, server_default="daily"
+        ),
         sa.Column("content", sa.Text(), nullable=False),
         sa.Column("message_count", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("time_range_start", sa.DateTime(timezone=True), nullable=False),

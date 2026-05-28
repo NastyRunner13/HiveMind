@@ -1,11 +1,4 @@
-"""
-Channel API Endpoints — list, retrieve, and sync channels.
-
-Provides:
-- GET /api/v1/channels — paginated channel list
-- GET /api/v1/channels/{channel_id} — single channel details
-- POST /api/v1/channels/sync — trigger manual Slack sync
-"""
+"""Authenticated channel query and Slack synchronization endpoints."""
 
 import logging
 import uuid
@@ -13,47 +6,51 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import get_settings
 from app.database import get_db
 from app.models.channel import ChannelType
+from app.models.workspace import Workspace
 from app.schemas.channel import (
     ChannelListResponse,
     ChannelResponse,
     ChannelSyncResponse,
 )
-from app.services.channel_service import get_channel_by_id, list_channels
+from app.security.auth import (
+    AuthenticatedPrincipal,
+    get_current_principal,
+    require_admin,
+)
+from app.services.authorization_service import (
+    get_member_channel_ids,
+    require_channel_access,
+)
+from app.services.channel_service import list_channels
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-settings = get_settings()
 
 
 @router.get("", response_model=ChannelListResponse)
 async def list_all_channels(
-    page: int = Query(1, ge=1, description="Page number"),
-    page_size: int = Query(50, ge=1, le=200, description="Items per page"),
-    channel_type: ChannelType | None = Query(
-        None, description="Filter by channel type"
-    ),
-    include_archived: bool = Query(False, description="Include archived channels"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    channel_type: ChannelType | None = Query(None),
+    include_archived: bool = Query(False),
     db: AsyncSession = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
 ) -> ChannelListResponse:
-    """
-    List all synced channels with pagination and filtering.
-
-    Supports filtering by channel type (public, private, dm, group_dm)
-    and optionally including archived channels.
-    """
+    """List channels visible to the authenticated workspace member."""
+    member_channel_ids = await get_member_channel_ids(db, principal)
     channels, total = await list_channels(
         session=db,
         page=page,
         page_size=page_size,
         channel_type=channel_type,
         include_archived=include_archived,
+        workspace_id=principal.workspace_id,
+        member_channel_ids=member_channel_ids,
     )
-
     return ChannelListResponse(
-        channels=[ChannelResponse.model_validate(ch) for ch in channels],
+        channels=[ChannelResponse.model_validate(channel) for channel in channels],
         total=total,
         page=page,
         page_size=page_size,
@@ -61,72 +58,30 @@ async def list_all_channels(
     )
 
 
-@router.get("/{channel_id}", response_model=ChannelResponse)
-async def get_channel(
-    channel_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db),
-) -> ChannelResponse:
-    """Get a single channel by its internal ID."""
-    channel = await get_channel_by_id(db, channel_id)
-    if channel is None:
-        raise HTTPException(status_code=404, detail="Channel not found")
-
-    return ChannelResponse.model_validate(channel)
-
-
 @router.post("/sync", response_model=ChannelSyncResponse)
 async def sync_channels_from_slack(
     db: AsyncSession = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(require_admin),
 ) -> ChannelSyncResponse:
-    """
-    Trigger a manual sync of channels from Slack.
-
-    Fetches all channels the bot is a member of and upserts them
-    into the database. Useful for initial setup or manual refresh.
-    """
+    """Synchronize Slack records; only canonical administrators may invoke it."""
+    from app.integrations.slack.connector import SlackConnector
     from app.slack.bot import get_slack_app
 
     slack_app = get_slack_app()
     if slack_app is None:
-        raise HTTPException(
-            status_code=503,
-            detail="Slack bot is not connected. Check your Slack configuration.",
-        )
+        raise HTTPException(status_code=503, detail="Slack bot is not connected")
 
-    from app.slack.sync import sync_channels, sync_users
-
-    # Sync channels and users
     try:
-        # Users must be synced BEFORE channels and memberships.
-        # membership_service.sync_channel_members() silently skips
-        # any user not yet in slack_users (L241 in membership_service),
-        # so syncing channels first leaves memberships empty.
-        user_stats = await sync_users(slack_app.client)
-        channel_stats = await sync_channels(slack_app.client)
-
-        # Now that both users and channels exist, sync memberships.
-        # Without this, ACL context is incomplete until the 3am
-        # daily cron safety-net runs full_sync_all_channels().
-        from sqlalchemy import select
-
-        from app.models.workspace import Workspace
-        from app.services.membership_service import membership_service
-
-        ws_result = await db.execute(
-            select(Workspace).where(Workspace.is_active.is_(True)).limit(1)
-        )
-        workspace = ws_result.scalar_one_or_none()
+        connector = SlackConnector(slack_app.client)
+        user_stats = await connector.sync_users()
+        channel_stats = await connector.sync_channels()
+        workspace = await db.get(Workspace, principal.workspace_id)
         membership_msg = ""
         if workspace:
-            membership_stats = await membership_service.full_sync_all_channels(
-                workspace_id=workspace.id,
-                slack_client=slack_app.client,
-            )
+            stats = await connector.sync_memberships(workspace.id)
             membership_msg = (
-                f" Synced memberships for "
-                f"{membership_stats['channels_synced']} channels."
+                f" Synced memberships for {stats['channels_synced']} channels."
             )
-
         return ChannelSyncResponse(
             synced_count=channel_stats["synced"],
             new_count=channel_stats["new"],
@@ -137,9 +92,17 @@ async def sync_channels_from_slack(
                 f"{user_stats['synced']} users.{membership_msg}"
             ),
         )
-    except Exception as e:
-        logger.error(f"Channel sync failed: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Sync failed: {str(e)}",
-        )
+    except Exception as exc:
+        logger.error("Channel sync failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail="Sync failed") from exc
+
+
+@router.get("/{channel_id}", response_model=ChannelResponse)
+async def get_channel(
+    channel_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
+) -> ChannelResponse:
+    """Get a channel only when it is visible to the authenticated user."""
+    channel = await require_channel_access(db, principal, channel_id)
+    return ChannelResponse.model_validate(channel)

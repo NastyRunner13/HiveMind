@@ -59,7 +59,9 @@ def chunk_text(
         encoding = tiktoken.get_encoding(encoding_name)
     except Exception:
         # Fallback to simple character-based chunking
-        logger.warning("tiktoken encoding not available, using character-based chunking")
+        logger.warning(
+            "tiktoken encoding not available, using character-based chunking"
+        )
         return _chunk_by_chars(text, max_chars=max_tokens * 4)
 
     tokens = encoding.encode(text)

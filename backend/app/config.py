@@ -37,9 +37,7 @@ class Settings(BaseSettings):
     @property
     def database_url_sync(self) -> str:
         """Return a synchronous database URL for Alembic migrations."""
-        return self.database_url.replace(
-            "postgresql+asyncpg", "postgresql+psycopg2"
-        )
+        return self.database_url.replace("postgresql+asyncpg", "postgresql+psycopg2")
 
     # ── Redis ────────────────────────────────────────────────────
     redis_url: str = "redis://localhost:6379/0"
@@ -60,6 +58,31 @@ class Settings(BaseSettings):
     def slack_configured(self) -> bool:
         """Check if Slack credentials are provided."""
         return bool(self.slack_bot_token and self.slack_signing_secret)
+
+    # ── OIDC Authentication (Keycloak / Auth0 / any OIDC provider) ──
+    # Protected REST endpoints require a bearer token validated via OIDC.
+    oidc_issuer_url: str = ""  # e.g., http://localhost:8080/realms/hivemind
+    oidc_audience: str = ""  # Client ID / audience claim expected in tokens
+    oidc_discovery_url: str = (
+        ""  # Optional; defaults to {issuer}/.well-known/openid-configuration
+    )
+
+    @property
+    def oidc_configured(self) -> bool:
+        """Check whether OIDC access-token validation is configured."""
+        return bool(self.oidc_issuer_url and self.oidc_audience)
+
+    @property
+    def effective_oidc_issuer(self) -> str:
+        """Return the expected token issuer."""
+        return self.oidc_issuer_url.rstrip("/")
+
+    @property
+    def oidc_discovery_url_resolved(self) -> str:
+        """Return the OpenID Connect discovery URL for JWKS discovery."""
+        if self.oidc_discovery_url:
+            return self.oidc_discovery_url
+        return f"{self.effective_oidc_issuer}/.well-known/openid-configuration"
 
     # ── LLM ──────────────────────────────────────────────────────
     # Supports: openai, google, anthropic, ollama, openrouter
@@ -85,7 +108,9 @@ class Settings(BaseSettings):
     #   2. Update SCHEMA_EMBEDDING_DIMENSIONS to match
     # The app validates this at startup and refuses to start on mismatch.
     embedding_provider: str = "local"  # local, openai
-    embedding_model: str = "all-MiniLM-L6-v2"  # local: all-MiniLM-L6-v2, openai: text-embedding-3-small
+    embedding_model: str = (
+        "all-MiniLM-L6-v2"  # local: all-MiniLM-L6-v2, openai: text-embedding-3-small
+    )
     embedding_api_key: str = ""  # Falls back to llm_api_key if empty (only for openai)
     embedding_dimensions: int = 384  # local: 384, openai: 1536
 
@@ -128,9 +153,9 @@ class Settings(BaseSettings):
         """
         if self.embedding_dimensions != self.schema_embedding_dimensions:
             raise SystemExit(
-                f"\n{'='*60}\n"
+                f"\n{'=' * 60}\n"
                 f"CRITICAL: Embedding dimension mismatch!\n"
-                f"{'='*60}\n"
+                f"{'=' * 60}\n"
                 f"Config: EMBEDDING_DIMENSIONS={self.embedding_dimensions}\n"
                 f"Schema: SCHEMA_EMBEDDING_DIMENSIONS={self.schema_embedding_dimensions}\n\n"
                 f"The database vector column was created with "
@@ -143,7 +168,7 @@ class Settings(BaseSettings):
                 f"  -- Then rebuild the HNSW index\n\n"
                 f"Then update .env:\n"
                 f"  SCHEMA_EMBEDDING_DIMENSIONS={self.embedding_dimensions}\n"
-                f"{'='*60}"
+                f"{'=' * 60}"
             )
 
 

@@ -23,7 +23,7 @@ import pytest
 
 # Check if asyncpg is available (needed by app.database → consumers)
 try:
-    import asyncpg
+    import asyncpg  # noqa: F401
 
     HAS_ASYNCPG = True
 except ImportError:
@@ -75,21 +75,15 @@ class TestProcessMessageIngested:
         }
 
         with (
-            patch(
-                "app.events.consumers.AsyncSessionLocal"
-            ) as mock_session_factory,
-            patch(
-                "app.services.knowledge_service.knowledge_service"
-            ) as mock_ks,
+            patch("app.events.consumers.AsyncSessionLocal") as mock_session_factory,
+            patch("app.services.knowledge_service.knowledge_service") as mock_ks,
         ):
             # Set up mock session
             mock_session = AsyncMock()
             mock_session_factory.return_value.__aenter__ = AsyncMock(
                 return_value=mock_session
             )
-            mock_session_factory.return_value.__aexit__ = AsyncMock(
-                return_value=None
-            )
+            mock_session_factory.return_value.__aexit__ = AsyncMock(return_value=None)
 
             # Channel query returns our sample channel (queried FIRST)
             ch_result = MagicMock()
@@ -99,9 +93,7 @@ class TestProcessMessageIngested:
             msg_result = MagicMock()
             msg_result.scalar_one_or_none.return_value = sample_message
 
-            mock_session.execute = AsyncMock(
-                side_effect=[ch_result, msg_result]
-            )
+            mock_session.execute = AsyncMock(side_effect=[ch_result, msg_result])
 
             # Not already indexed
             mock_ks.is_already_indexed = AsyncMock(return_value=False)
@@ -115,9 +107,43 @@ class TestProcessMessageIngested:
             )
 
     @pytest.mark.asyncio
-    async def test_skips_already_indexed_message(
+    async def test_indexes_normalized_message_event(
         self, sample_message, sample_channel
     ):
+        """New message events resolve canonical entity UUIDs directly."""
+        from app.events.consumers import _process_message_ingested
+
+        sample_message.channel_id = sample_channel.id
+        event_data = {
+            "type": "message.ingested",
+            "data": {
+                "schema_version": 1,
+                "platform": "slack",
+                "channel_id": str(sample_channel.id),
+                "message_id": str(sample_message.id),
+            },
+        }
+
+        with (
+            patch("app.events.consumers.AsyncSessionLocal") as mock_factory,
+            patch("app.services.knowledge_service.knowledge_service") as mock_ks,
+        ):
+            session = AsyncMock()
+            mock_factory.return_value.__aenter__ = AsyncMock(return_value=session)
+            mock_factory.return_value.__aexit__ = AsyncMock(return_value=None)
+            session.get = AsyncMock(side_effect=[sample_channel, sample_message])
+            mock_ks.is_already_indexed = AsyncMock(return_value=False)
+            mock_ks.index_message = AsyncMock(return_value=1)
+
+            await _process_message_ingested(event_data)
+
+            mock_ks.index_message.assert_called_once_with(
+                message=sample_message, channel=sample_channel
+            )
+            session.execute.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_skips_already_indexed_message(self, sample_message, sample_channel):
         """MESSAGE_INGESTED should skip messages that are already indexed."""
         from app.events.consumers import _process_message_ingested
 
@@ -130,20 +156,14 @@ class TestProcessMessageIngested:
         }
 
         with (
-            patch(
-                "app.events.consumers.AsyncSessionLocal"
-            ) as mock_session_factory,
-            patch(
-                "app.services.knowledge_service.knowledge_service"
-            ) as mock_ks,
+            patch("app.events.consumers.AsyncSessionLocal") as mock_session_factory,
+            patch("app.services.knowledge_service.knowledge_service") as mock_ks,
         ):
             mock_session = AsyncMock()
             mock_session_factory.return_value.__aenter__ = AsyncMock(
                 return_value=mock_session
             )
-            mock_session_factory.return_value.__aexit__ = AsyncMock(
-                return_value=None
-            )
+            mock_session_factory.return_value.__aexit__ = AsyncMock(return_value=None)
 
             # Channel first, then message
             ch_result = MagicMock()
@@ -152,9 +172,7 @@ class TestProcessMessageIngested:
             msg_result = MagicMock()
             msg_result.scalar_one_or_none.return_value = sample_message
 
-            mock_session.execute = AsyncMock(
-                side_effect=[ch_result, msg_result]
-            )
+            mock_session.execute = AsyncMock(side_effect=[ch_result, msg_result])
 
             # Already indexed — should skip
             mock_ks.is_already_indexed = AsyncMock(return_value=True)
@@ -191,16 +209,12 @@ class TestProcessMessageIngested:
             },
         }
 
-        with patch(
-            "app.events.consumers.AsyncSessionLocal"
-        ) as mock_session_factory:
+        with patch("app.events.consumers.AsyncSessionLocal") as mock_session_factory:
             mock_session = AsyncMock()
             mock_session_factory.return_value.__aenter__ = AsyncMock(
                 return_value=mock_session
             )
-            mock_session_factory.return_value.__aexit__ = AsyncMock(
-                return_value=None
-            )
+            mock_session_factory.return_value.__aexit__ = AsyncMock(return_value=None)
 
             # Channel not found
             ch_result = MagicMock()
@@ -223,16 +237,12 @@ class TestProcessMessageIngested:
             },
         }
 
-        with patch(
-            "app.events.consumers.AsyncSessionLocal"
-        ) as mock_session_factory:
+        with patch("app.events.consumers.AsyncSessionLocal") as mock_session_factory:
             mock_session = AsyncMock()
             mock_session_factory.return_value.__aenter__ = AsyncMock(
                 return_value=mock_session
             )
-            mock_session_factory.return_value.__aexit__ = AsyncMock(
-                return_value=None
-            )
+            mock_session_factory.return_value.__aexit__ = AsyncMock(return_value=None)
 
             # Channel found, message not found
             ch_result = MagicMock()
@@ -241,17 +251,13 @@ class TestProcessMessageIngested:
             msg_result = MagicMock()
             msg_result.scalar_one_or_none.return_value = None
 
-            mock_session.execute = AsyncMock(
-                side_effect=[ch_result, msg_result]
-            )
+            mock_session.execute = AsyncMock(side_effect=[ch_result, msg_result])
 
             # Should not raise
             await _process_message_ingested(event_data)
 
     @pytest.mark.asyncio
-    async def test_message_lookup_uses_channel_id(
-        self, sample_message, sample_channel
-    ):
+    async def test_message_lookup_uses_channel_id(self, sample_message, sample_channel):
         """Message lookup should include channel_id to prevent
         cross-channel timestamp collisions."""
         from app.events.consumers import _process_message_ingested
@@ -265,20 +271,14 @@ class TestProcessMessageIngested:
         }
 
         with (
-            patch(
-                "app.events.consumers.AsyncSessionLocal"
-            ) as mock_session_factory,
-            patch(
-                "app.services.knowledge_service.knowledge_service"
-            ) as mock_ks,
+            patch("app.events.consumers.AsyncSessionLocal") as mock_session_factory,
+            patch("app.services.knowledge_service.knowledge_service") as mock_ks,
         ):
             mock_session = AsyncMock()
             mock_session_factory.return_value.__aenter__ = AsyncMock(
                 return_value=mock_session
             )
-            mock_session_factory.return_value.__aexit__ = AsyncMock(
-                return_value=None
-            )
+            mock_session_factory.return_value.__aexit__ = AsyncMock(return_value=None)
 
             ch_result = MagicMock()
             ch_result.scalar_one_or_none.return_value = sample_channel
@@ -286,9 +286,7 @@ class TestProcessMessageIngested:
             msg_result = MagicMock()
             msg_result.scalar_one_or_none.return_value = sample_message
 
-            mock_session.execute = AsyncMock(
-                side_effect=[ch_result, msg_result]
-            )
+            mock_session.execute = AsyncMock(side_effect=[ch_result, msg_result])
 
             mock_ks.is_already_indexed = AsyncMock(return_value=False)
             mock_ks.index_message = AsyncMock(return_value=1)
@@ -325,20 +323,14 @@ class TestProcessMessageIngested:
         }
 
         with (
-            patch(
-                "app.events.consumers.AsyncSessionLocal"
-            ) as mock_session_factory,
-            patch(
-                "app.services.knowledge_service.knowledge_service"
-            ) as mock_ks,
+            patch("app.events.consumers.AsyncSessionLocal") as mock_session_factory,
+            patch("app.services.knowledge_service.knowledge_service") as mock_ks,
         ):
             mock_session = AsyncMock()
             mock_session_factory.return_value.__aenter__ = AsyncMock(
                 return_value=mock_session
             )
-            mock_session_factory.return_value.__aexit__ = AsyncMock(
-                return_value=None
-            )
+            mock_session_factory.return_value.__aexit__ = AsyncMock(return_value=None)
 
             ch_result = MagicMock()
             ch_result.scalar_one_or_none.return_value = sample_channel
@@ -346,9 +338,7 @@ class TestProcessMessageIngested:
             msg_result = MagicMock()
             msg_result.scalar_one_or_none.return_value = sample_message
 
-            mock_session.execute = AsyncMock(
-                side_effect=[ch_result, msg_result]
-            )
+            mock_session.execute = AsyncMock(side_effect=[ch_result, msg_result])
 
             mock_ks.is_already_indexed = AsyncMock(return_value=False)
             mock_ks.index_message = AsyncMock(
@@ -365,9 +355,7 @@ class TestProcessMessageEdited:
     """Tests for _process_message_edited handler."""
 
     @pytest.mark.asyncio
-    async def test_reindexes_edited_message(
-        self, sample_message, sample_channel
-    ):
+    async def test_reindexes_edited_message(self, sample_message, sample_channel):
         """MESSAGE_EDITED should delete old chunks and re-index."""
         from app.events.consumers import _process_message_edited
 
@@ -380,20 +368,14 @@ class TestProcessMessageEdited:
         }
 
         with (
-            patch(
-                "app.events.consumers.AsyncSessionLocal"
-            ) as mock_session_factory,
-            patch(
-                "app.services.knowledge_service.knowledge_service"
-            ) as mock_ks,
+            patch("app.events.consumers.AsyncSessionLocal") as mock_session_factory,
+            patch("app.services.knowledge_service.knowledge_service") as mock_ks,
         ):
             mock_session = AsyncMock()
             mock_session_factory.return_value.__aenter__ = AsyncMock(
                 return_value=mock_session
             )
-            mock_session_factory.return_value.__aexit__ = AsyncMock(
-                return_value=None
-            )
+            mock_session_factory.return_value.__aexit__ = AsyncMock(return_value=None)
 
             # Channel first, then message (new lookup order)
             ch_result = MagicMock()
@@ -402,9 +384,7 @@ class TestProcessMessageEdited:
             msg_result = MagicMock()
             msg_result.scalar_one_or_none.return_value = sample_message
 
-            mock_session.execute = AsyncMock(
-                side_effect=[ch_result, msg_result]
-            )
+            mock_session.execute = AsyncMock(side_effect=[ch_result, msg_result])
 
             mock_ks.delete_chunks_for_source = AsyncMock(return_value=2)
             mock_ks.index_message = AsyncMock(return_value=3)
@@ -412,10 +392,44 @@ class TestProcessMessageEdited:
             await _process_message_edited(event_data)
 
             # Verify old chunks were deleted
-            mock_ks.delete_chunks_for_source.assert_called_once_with(
-                sample_message.id
-            )
+            mock_ks.delete_chunks_for_source.assert_called_once_with(sample_message.id)
             # Verify re-indexing happened
+            mock_ks.index_message.assert_called_once_with(
+                message=sample_message, channel=sample_channel
+            )
+
+    @pytest.mark.asyncio
+    async def test_reindexes_normalized_message_event(
+        self, sample_message, sample_channel
+    ):
+        """Edited events also load by canonical UUID instead of Slack fields."""
+        from app.events.consumers import _process_message_edited
+
+        sample_message.channel_id = sample_channel.id
+        event_data = {
+            "type": "message.edited",
+            "data": {
+                "schema_version": 1,
+                "platform": "slack",
+                "channel_id": str(sample_channel.id),
+                "message_id": str(sample_message.id),
+            },
+        }
+
+        with (
+            patch("app.events.consumers.AsyncSessionLocal") as mock_factory,
+            patch("app.services.knowledge_service.knowledge_service") as mock_ks,
+        ):
+            session = AsyncMock()
+            mock_factory.return_value.__aenter__ = AsyncMock(return_value=session)
+            mock_factory.return_value.__aexit__ = AsyncMock(return_value=None)
+            session.get = AsyncMock(side_effect=[sample_channel, sample_message])
+            mock_ks.delete_chunks_for_source = AsyncMock(return_value=1)
+            mock_ks.index_message = AsyncMock(return_value=1)
+
+            await _process_message_edited(event_data)
+
+            mock_ks.delete_chunks_for_source.assert_called_once_with(sample_message.id)
             mock_ks.index_message.assert_called_once_with(
                 message=sample_message, channel=sample_channel
             )
@@ -426,9 +440,7 @@ class TestProcessEvent:
     """Tests for _process_event (ack-on-success semantics)."""
 
     @pytest.mark.asyncio
-    async def test_acks_on_successful_processing(
-        self, sample_message, sample_channel
-    ):
+    async def test_acks_on_successful_processing(self, sample_message, sample_channel):
         """Successful event processing should call event_bus.ack()."""
         from app.events.consumers import _process_event
 
@@ -444,30 +456,22 @@ class TestProcessEvent:
         }
 
         with (
-            patch(
-                "app.events.consumers.AsyncSessionLocal"
-            ) as mock_session_factory,
-            patch(
-                "app.services.knowledge_service.knowledge_service"
-            ) as mock_ks,
+            patch("app.events.consumers.AsyncSessionLocal") as mock_session_factory,
+            patch("app.services.knowledge_service.knowledge_service") as mock_ks,
             patch("app.events.consumers.event_bus") as mock_bus,
         ):
             mock_session = AsyncMock()
             mock_session_factory.return_value.__aenter__ = AsyncMock(
                 return_value=mock_session
             )
-            mock_session_factory.return_value.__aexit__ = AsyncMock(
-                return_value=None
-            )
+            mock_session_factory.return_value.__aexit__ = AsyncMock(return_value=None)
 
             ch_result = MagicMock()
             ch_result.scalar_one_or_none.return_value = sample_channel
             msg_result = MagicMock()
             msg_result.scalar_one_or_none.return_value = sample_message
 
-            mock_session.execute = AsyncMock(
-                side_effect=[ch_result, msg_result]
-            )
+            mock_session.execute = AsyncMock(side_effect=[ch_result, msg_result])
 
             mock_ks.is_already_indexed = AsyncMock(return_value=False)
             mock_ks.index_message = AsyncMock(return_value=1)
@@ -481,9 +485,7 @@ class TestProcessEvent:
             )
 
     @pytest.mark.asyncio
-    async def test_does_not_ack_on_failure(
-        self, sample_message, sample_channel
-    ):
+    async def test_does_not_ack_on_failure(self, sample_message, sample_channel):
         """Failed event processing should NOT call event_bus.ack()."""
         from app.events.consumers import _process_event
 
@@ -499,30 +501,22 @@ class TestProcessEvent:
         }
 
         with (
-            patch(
-                "app.events.consumers.AsyncSessionLocal"
-            ) as mock_session_factory,
-            patch(
-                "app.services.knowledge_service.knowledge_service"
-            ) as mock_ks,
+            patch("app.events.consumers.AsyncSessionLocal") as mock_session_factory,
+            patch("app.services.knowledge_service.knowledge_service") as mock_ks,
             patch("app.events.consumers.event_bus") as mock_bus,
         ):
             mock_session = AsyncMock()
             mock_session_factory.return_value.__aenter__ = AsyncMock(
                 return_value=mock_session
             )
-            mock_session_factory.return_value.__aexit__ = AsyncMock(
-                return_value=None
-            )
+            mock_session_factory.return_value.__aexit__ = AsyncMock(return_value=None)
 
             ch_result = MagicMock()
             ch_result.scalar_one_or_none.return_value = sample_channel
             msg_result = MagicMock()
             msg_result.scalar_one_or_none.return_value = sample_message
 
-            mock_session.execute = AsyncMock(
-                side_effect=[ch_result, msg_result]
-            )
+            mock_session.execute = AsyncMock(side_effect=[ch_result, msg_result])
 
             mock_ks.is_already_indexed = AsyncMock(return_value=False)
             mock_ks.index_message = AsyncMock(

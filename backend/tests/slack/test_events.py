@@ -241,8 +241,6 @@ class TestHandleAppMention:
     async def test_app_mention_say_response(self, sample_app_mention_event):
         """The handler should call say() with the agent's response."""
         mock_say = AsyncMock()
-        user = sample_app_mention_event["user"]
-
         # Simulate what the updated handler does — it calls agent_service
         # and posts the response. We test that say() is called with content.
         response_text = "🐝 Here's what I found about your question..."
@@ -271,9 +269,9 @@ class TestHandleDigestCommand:
         self, mock_session_cls, mock_digest_service
     ):
         """Should correctly parse a Slack channel mention and query by slack_channel_id."""
-        from app.slack.events import _handle_digest_command
         from app.models.channel import Channel, ChannelType
         from app.models.workspace import Workspace
+        from app.slack.events import _handle_digest_command
 
         # Mock say
         mock_say = AsyncMock()
@@ -283,7 +281,9 @@ class TestHandleDigestCommand:
         mock_session_cls.return_value.__aenter__.return_value = mock_session
 
         # Mock workspace and channel results
-        mock_workspace = Workspace(id="204ab53a-a900-48ee-95de-3bf4dccdd89e", is_active=True)
+        mock_workspace = Workspace(
+            id="204ab53a-a900-48ee-95de-3bf4dccdd89e", is_active=True
+        )
         mock_channel = Channel(
             id="b6af1f5d-7d73-49c3-a352-1ba98ad17f78",
             slack_channel_id="C0B5W4HHHEE",
@@ -307,7 +307,9 @@ class TestHandleDigestCommand:
         # Mock digest result
         mock_digest = MagicMock()
         mock_digest.content = "Awesome digest content"
-        mock_digest_service.generate_channel_digest = AsyncMock(return_value=mock_digest)
+        mock_digest_service.generate_channel_digest = AsyncMock(
+            return_value=mock_digest
+        )
 
         # Run command with a channel mention format (e.g. <#C0B5W4HHHEE>)
         await _handle_digest_command(
@@ -319,8 +321,12 @@ class TestHandleDigestCommand:
 
         # Assert say calls
         assert mock_say.call_count == 2
-        mock_say.assert_any_call(text="🐝 Generating digest... one moment!", thread_ts="12345")
-        mock_say.assert_any_call(text="📋 *Digest for #social*\n\nAwesome digest content", thread_ts="12345")
+        mock_say.assert_any_call(
+            text="🐝 Generating digest... one moment!", thread_ts="12345"
+        )
+        mock_say.assert_any_call(
+            text="📋 *Digest for #social*\n\nAwesome digest content", thread_ts="12345"
+        )
 
         # Assert correct SQL parameters were queried
         # The second execute should query slack_channel_id
@@ -337,9 +343,9 @@ class TestHandleDigestCommand:
         self, mock_session_cls, mock_digest_service
     ):
         """Should correctly parse a plain channel name and query by name ILIKE."""
-        from app.slack.events import _handle_digest_command
         from app.models.channel import Channel, ChannelType
         from app.models.workspace import Workspace
+        from app.slack.events import _handle_digest_command
 
         # Mock say
         mock_say = AsyncMock()
@@ -349,7 +355,9 @@ class TestHandleDigestCommand:
         mock_session_cls.return_value.__aenter__.return_value = mock_session
 
         # Mock workspace and channel results
-        mock_workspace = Workspace(id="204ab53a-a900-48ee-95de-3bf4dccdd89e", is_active=True)
+        mock_workspace = Workspace(
+            id="204ab53a-a900-48ee-95de-3bf4dccdd89e", is_active=True
+        )
         mock_channel = Channel(
             id="b6af1f5d-7d73-49c3-a352-1ba98ad17f78",
             slack_channel_id="C0B5W4HHHEE",
@@ -371,7 +379,9 @@ class TestHandleDigestCommand:
         # Mock digest result
         mock_digest = MagicMock()
         mock_digest.content = "Awesome digest content"
-        mock_digest_service.generate_channel_digest = AsyncMock(return_value=mock_digest)
+        mock_digest_service.generate_channel_digest = AsyncMock(
+            return_value=mock_digest
+        )
 
         # Run command with plain channel name
         await _handle_digest_command(
@@ -383,8 +393,12 @@ class TestHandleDigestCommand:
 
         # Assert say calls
         assert mock_say.call_count == 2
-        mock_say.assert_any_call(text="🐝 Generating digest... one moment!", thread_ts="12345")
-        mock_say.assert_any_call(text="📋 *Digest for #social*\n\nAwesome digest content", thread_ts="12345")
+        mock_say.assert_any_call(
+            text="🐝 Generating digest... one moment!", thread_ts="12345"
+        )
+        mock_say.assert_any_call(
+            text="📋 *Digest for #social*\n\nAwesome digest content", thread_ts="12345"
+        )
 
         # Assert correct SQL parameters were queried
         called_args = mock_execute.call_args_list

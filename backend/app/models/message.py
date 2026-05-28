@@ -29,6 +29,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
+from app.models.identity import Platform
 
 
 class MessageType(str, enum.Enum):
@@ -60,6 +61,27 @@ class Message(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         ForeignKey("slack_users.id", ondelete="SET NULL"),
         nullable=True,  # System messages may not have a sender
         index=True,
+    )
+    workspace_integration_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("workspace_integrations.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    platform: Mapped[Platform] = mapped_column(
+        Enum(
+            Platform,
+            name="platform_enum",
+            values_callable=lambda values: [value.value for value in values],
+        ),
+        nullable=False,
+        default=Platform.SLACK,
+    )
+    external_message_id: Mapped[str | None] = mapped_column(
+        String(255), nullable=True, index=True
+    )
+    external_thread_id: Mapped[str | None] = mapped_column(
+        String(255), nullable=True, index=True
     )
 
     # ── Slack Identifiers ────────────────────────────────────────
@@ -97,11 +119,15 @@ class Message(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     slack_sent_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
+    sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
 
     # ── Relationships ────────────────────────────────────────────
     workspace = relationship("Workspace", back_populates="messages")
     channel = relationship("Channel", back_populates="messages")
     sender = relationship("SlackUser", back_populates="messages")
+    workspace_integration = relationship("WorkspaceIntegration")
 
     # ── Constraints ──────────────────────────────────────────────
     __table_args__ = (
@@ -111,6 +137,12 @@ class Message(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             "channel_id",
             "slack_message_ts",
             name="uq_message_workspace_channel_ts",
+        ),
+        UniqueConstraint(
+            "workspace_integration_id",
+            "channel_id",
+            "external_message_id",
+            name="uq_message_integration_channel_external_id",
         ),
     )
 

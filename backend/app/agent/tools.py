@@ -15,10 +15,11 @@ context (channel memberships looked up from the database).
 """
 
 import logging
+import uuid
 from datetime import datetime, timedelta, timezone
 
 from langchain_core.tools import tool
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from app.database import AsyncSessionLocal
 from app.models.channel import Channel, ChannelType
@@ -33,7 +34,12 @@ logger = logging.getLogger(__name__)
 # ═════════════════════════════════════════════════════════════════
 
 
-def create_tools(user_slack_id: str, user_channel_ids: list[str]) -> list:
+def create_tools(
+    user_slack_id: str,
+    user_channel_ids: list[str],
+    canonical_user_id: uuid.UUID | None = None,
+    canonical_channel_ids: list[uuid.UUID] | None = None,
+) -> list:
     """
     Create agent tools with trusted user context baked in via closures.
 
@@ -41,9 +47,17 @@ def create_tools(user_slack_id: str, user_channel_ids: list[str]) -> list:
     from server-derived context (channel memberships looked up from
     the database by the membership_service).
 
+    Supports dual-path ACL:
+    - Slack IDs (``user_slack_id``, ``user_channel_ids``): used by the
+      Slack event handler path (``app_mention``).
+    - Canonical UUIDs (``canonical_user_id``, ``canonical_channel_ids``):
+      used by the REST API path (OIDC-authenticated requests).
+
     Args:
         user_slack_id: The authenticated user's Slack ID (server-derived).
         user_channel_ids: Slack channel IDs the user is a member of (server-derived).
+        canonical_user_id: Internal user UUID, when the caller is authenticated via OIDC.
+        canonical_channel_ids: Internal channel UUIDs the user has access to.
 
     Returns:
         List of LangChain tool instances scoped to this user's permissions.
@@ -64,6 +78,8 @@ def create_tools(user_slack_id: str, user_channel_ids: list[str]) -> list:
             query=query,
             user_channel_ids=user_channel_ids,
             user_slack_id=user_slack_id,
+            user_channel_uuids=canonical_channel_ids,
+            user_id=canonical_user_id,
             top_k=5,
         )
 
@@ -73,9 +89,7 @@ def create_tools(user_slack_id: str, user_channel_ids: list[str]) -> list:
         formatted = []
         for i, r in enumerate(results, 1):
             channel_info = (
-                f" (channel: {r.source_channel_id})"
-                if r.source_channel_id
-                else ""
+                f" (channel: {r.source_channel_id})" if r.source_channel_id else ""
             )
             formatted.append(
                 f"[{i}] (score: {r.score:.2f}, "
@@ -105,9 +119,7 @@ def create_tools(user_slack_id: str, user_channel_ids: list[str]) -> list:
             since = datetime.now(timezone.utc) - timedelta(hours=hours)
 
             # Find the channel
-            query = select(Channel).where(
-                Channel.name.ilike(f"%{channel_name}%")
-            )
+            query = select(Channel).where(Channel.name.ilike(f"%{channel_name}%"))
             result = await session.execute(query)
             channel = result.scalar_one_or_none()
 
@@ -115,19 +127,29 @@ def create_tools(user_slack_id: str, user_channel_ids: list[str]) -> list:
                 return f"Channel '{channel_name}' not found."
 
             # ACL check: verify user has access to this channel
-            if channel.slack_channel_id not in user_channel_ids:
+            # Check both legacy slack_channel_id and normalized external_channel_id
+            ext_id = getattr(channel, "external_channel_id", None)
+            has_slack_access = channel.slack_channel_id in user_channel_ids
+            has_ext_access = ext_id and ext_id in user_channel_ids
+            has_uuid_access = (
+                canonical_channel_ids is not None
+                and channel.id in canonical_channel_ids
+            )
+            if not (has_slack_access or has_ext_access or has_uuid_access):
                 if channel.channel_type != ChannelType.PUBLIC:
                     return (
                         f"You don't have access to #{channel_name}. "
                         f"It's a {channel.channel_type.value} channel."
                     )
 
-            # Fetch recent messages
             msg_query = (
                 select(Message)
                 .where(
                     Message.channel_id == channel.id,
-                    Message.slack_sent_at >= since,
+                    or_(
+                        Message.sent_at >= since,
+                        Message.slack_sent_at >= since,
+                    ),
                 )
                 .order_by(Message.slack_sent_at.desc())
                 .limit(limit)
@@ -136,23 +158,18 @@ def create_tools(user_slack_id: str, user_channel_ids: list[str]) -> list:
             messages = msg_result.scalars().all()
 
             if not messages:
-                return (
-                    f"No messages in #{channel_name} "
-                    f"in the last {hours} hours."
-                )
+                return f"No messages in #{channel_name} in the last {hours} hours."
 
             formatted = []
             for msg in reversed(messages):  # Chronological order
-                time_str = msg.slack_sent_at.strftime("%H:%M")
-                content = (
-                    msg.content[:200] if msg.content else "[no content]"
-                )
+                ts = msg.sent_at or msg.slack_sent_at
+                time_str = ts.strftime("%H:%M") if ts else "??:??"
+                content = msg.content[:200] if msg.content else "[no content]"
                 formatted.append(f"[{time_str}] {content}")
 
             return (
                 f"Recent messages in #{channel_name} "
-                f"(last {hours}h, {len(messages)} messages):\n\n"
-                + "\n".join(formatted)
+                f"(last {hours}h, {len(messages)} messages):\n\n" + "\n".join(formatted)
             )
 
     @tool
@@ -163,16 +180,23 @@ def create_tools(user_slack_id: str, user_channel_ids: list[str]) -> list:
         need to find which channel a topic might be discussed in.
         """
         async with AsyncSessionLocal() as session:
-            # Filter to channels the user is a member of + public channels
+            # Build membership condition — check Slack IDs and canonical UUIDs
+            membership_conditions = [
+                Channel.slack_channel_id.in_(user_channel_ids),
+                Channel.channel_type == ChannelType.PUBLIC,
+            ]
+            if user_channel_ids:
+                membership_conditions.append(
+                    Channel.external_channel_id.in_(user_channel_ids)
+                )
+            if canonical_channel_ids:
+                membership_conditions.append(Channel.id.in_(canonical_channel_ids))
+
             query = (
                 select(Channel)
                 .where(
                     Channel.is_archived.is_(False),
-                    # Show channels user is in, plus all public channels
-                    (
-                        Channel.slack_channel_id.in_(user_channel_ids)
-                        | (Channel.channel_type == ChannelType.PUBLIC)
-                    ),
+                    or_(*membership_conditions),
                 )
                 .order_by(Channel.name)
                 .limit(50)
@@ -183,16 +207,20 @@ def create_tools(user_slack_id: str, user_channel_ids: list[str]) -> list:
             if not channels:
                 return "No channels found."
 
+            # Build a set for quick membership lookup
+            member_ext_ids = set(user_channel_ids)
+            member_uuid_set = set(canonical_channel_ids or [])
+
             formatted = []
             for ch in channels:
-                purpose = (
-                    f" — {ch.purpose[:60]}..." if ch.purpose else ""
+                purpose = f" — {ch.purpose[:60]}..." if ch.purpose else ""
+                ext_id = getattr(ch, "external_channel_id", None)
+                is_member = (
+                    ch.slack_channel_id in member_ext_ids
+                    or (ext_id and ext_id in member_ext_ids)
+                    or ch.id in member_uuid_set
                 )
-                member_indicator = (
-                    " ✓"
-                    if ch.slack_channel_id in user_channel_ids
-                    else ""
-                )
+                member_indicator = " ✓" if is_member else ""
                 formatted.append(
                     f"• #{ch.name} ({ch.channel_type.value}, "
                     f"{ch.member_count} members){member_indicator}{purpose}"
@@ -218,9 +246,7 @@ def create_tools(user_slack_id: str, user_channel_ids: list[str]) -> list:
         async with AsyncSessionLocal() as session:
             since = datetime.now(timezone.utc) - timedelta(hours=hours)
 
-            query = select(Channel).where(
-                Channel.name.ilike(f"%{channel_name}%")
-            )
+            query = select(Channel).where(Channel.name.ilike(f"%{channel_name}%"))
             result = await session.execute(query)
             channel = result.scalar_one_or_none()
 
@@ -228,7 +254,14 @@ def create_tools(user_slack_id: str, user_channel_ids: list[str]) -> list:
                 return f"Channel '{channel_name}' not found."
 
             # ACL check: verify user has access
-            if channel.slack_channel_id not in user_channel_ids:
+            ext_id = getattr(channel, "external_channel_id", None)
+            has_slack_access = channel.slack_channel_id in user_channel_ids
+            has_ext_access = ext_id and ext_id in user_channel_ids
+            has_uuid_access = (
+                canonical_channel_ids is not None
+                and channel.id in canonical_channel_ids
+            )
+            if not (has_slack_access or has_ext_access or has_uuid_access):
                 if channel.channel_type != ChannelType.PUBLIC:
                     return (
                         f"You don't have access to #{channel_name}. "
@@ -238,23 +271,23 @@ def create_tools(user_slack_id: str, user_channel_ids: list[str]) -> list:
             # Count messages
             count_query = select(func.count(Message.id)).where(
                 Message.channel_id == channel.id,
-                Message.slack_sent_at >= since,
+                or_(
+                    Message.sent_at >= since,
+                    Message.slack_sent_at >= since,
+                ),
             )
-            msg_count = (
-                (await session.execute(count_query)).scalar() or 0
-            )
+            msg_count = (await session.execute(count_query)).scalar() or 0
 
             # Count threads
-            thread_query = select(
-                func.count(func.distinct(Message.thread_ts))
-            ).where(
+            thread_query = select(func.count(func.distinct(Message.thread_ts))).where(
                 Message.channel_id == channel.id,
-                Message.slack_sent_at >= since,
+                or_(
+                    Message.sent_at >= since,
+                    Message.slack_sent_at >= since,
+                ),
                 Message.thread_ts.isnot(None),
             )
-            thread_count = (
-                (await session.execute(thread_query)).scalar() or 0
-            )
+            thread_count = (await session.execute(thread_query)).scalar() or 0
 
             return (
                 f"#{channel_name} activity (last {hours}h):\n"
@@ -292,6 +325,7 @@ def create_tools(user_slack_id: str, user_channel_ids: list[str]) -> list:
         if personalized and not channel_name:
             result = await digest_service.generate_personalized_digest(
                 user_slack_id=user_slack_id,
+                canonical_user_id=canonical_user_id,
                 hours=hours,
             )
             if result:
@@ -308,17 +342,13 @@ def create_tools(user_slack_id: str, user_channel_ids: list[str]) -> list:
                 from app.models.workspace import Workspace
 
                 ws_result = await session.execute(
-                    select(Workspace)
-                    .where(Workspace.is_active.is_(True))
-                    .limit(1)
+                    select(Workspace).where(Workspace.is_active.is_(True)).limit(1)
                 )
                 workspace = ws_result.scalar_one_or_none()
                 if not workspace:
                     return "No active workspace found."
 
-                query = select(Channel).where(
-                    Channel.name.ilike(f"%{channel_name}%")
-                )
+                query = select(Channel).where(Channel.name.ilike(f"%{channel_name}%"))
                 result = await session.execute(query)
                 channel = result.scalar_one_or_none()
 
@@ -326,7 +356,14 @@ def create_tools(user_slack_id: str, user_channel_ids: list[str]) -> list:
                     return f"Channel '{channel_name}' not found."
 
                 # ACL check: skip private channels user isn't in
-                if channel.slack_channel_id not in user_channel_ids:
+                ext_id = getattr(channel, "external_channel_id", None)
+                has_slack = channel.slack_channel_id in user_channel_ids
+                has_ext = ext_id and ext_id in user_channel_ids
+                has_uuid = (
+                    canonical_channel_ids is not None
+                    and channel.id in canonical_channel_ids
+                )
+                if not (has_slack or has_ext or has_uuid):
                     if channel.channel_type != ChannelType.PUBLIC:
                         return (
                             f"You don't have access to #{channel_name}. "
@@ -359,10 +396,7 @@ def create_tools(user_slack_id: str, user_channel_ids: list[str]) -> list:
                 parts = [d.content for d in (accessible or digests)]
                 return "Daily Digest:\n\n" + "\n\n---\n\n".join(parts)
             else:
-                return (
-                    "No significant activity across channels "
-                    "in the last 24 hours."
-                )
+                return "No significant activity across channels in the last 24 hours."
 
     return [
         search_knowledge,

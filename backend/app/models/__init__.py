@@ -10,6 +10,13 @@ from app.models.channel import Channel
 from app.models.digest import Digest
 from app.models.embedding import DocumentChunk
 from app.models.file_metadata import FileMetadata
+from app.models.identity import (
+    AuthIdentity,
+    Platform,
+    User,
+    UserPlatformMapping,
+    WorkspaceIntegration,
+)
 from app.models.membership import ChannelMembership
 from app.models.message import Message
 from app.models.user import SlackUser
@@ -22,6 +29,11 @@ __all__ = [
     "SlackUser",
     "Message",
     "FileMetadata",
+    "Platform",
+    "User",
+    "WorkspaceIntegration",
+    "UserPlatformMapping",
+    "AuthIdentity",
     "DocumentChunk",
     "Digest",
     "ChannelMembership",

@@ -11,10 +11,7 @@ Note: APScheduler's AsyncIOScheduler needs an event loop, so
 scheduler.start() tests must be async.
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
-
+from unittest.mock import patch
 
 # ═════════════════════════════════════════════════════════════════
 # SCHEDULER LIFECYCLE
@@ -27,6 +24,7 @@ class TestSchedulerLifecycle:
     def test_scheduler_not_running_initially(self):
         """Scheduler is not running when first created."""
         from app.services.scheduler import SchedulerService
+
         service = SchedulerService()
         assert service.is_running is False
 
@@ -39,6 +37,7 @@ class TestSchedulerLifecycle:
             mock_settings.digest_timezone = "UTC"
 
             from app.services.scheduler import SchedulerService
+
             service = SchedulerService()
             service.start()
 
@@ -56,6 +55,7 @@ class TestSchedulerLifecycle:
             mock_settings.digest_timezone = "UTC"
 
             from app.services.scheduler import SchedulerService
+
             service = SchedulerService()
             service.start()
             service.stop()
@@ -71,6 +71,7 @@ class TestSchedulerLifecycle:
             mock_settings.digest_timezone = "UTC"
 
             from app.services.scheduler import SchedulerService
+
             service = SchedulerService()
             service.start()
             service.start()  # Should not raise
@@ -82,6 +83,7 @@ class TestSchedulerLifecycle:
     def test_stop_when_not_running_is_noop(self):
         """Stopping a not-running scheduler does nothing."""
         from app.services.scheduler import SchedulerService
+
         service = SchedulerService()
         service.stop()  # Should not raise
         assert service.is_running is False
@@ -104,6 +106,7 @@ class TestDigestJob:
             mock_settings.digest_timezone = "UTC"
 
             from app.services.scheduler import SchedulerService
+
             service = SchedulerService()
             service.start()
 
@@ -122,6 +125,7 @@ class TestDigestJob:
             mock_settings.digest_timezone = "UTC"
 
             from app.services.scheduler import SchedulerService
+
             service = SchedulerService()
             service.start()
 
@@ -142,6 +146,7 @@ class TestDigestJob:
                 mock_settings.digest_timezone = "UTC"
 
                 from app.services.scheduler import SchedulerService
+
                 service = SchedulerService()
                 service.start()
 
@@ -160,10 +165,10 @@ class TestDigestJob:
             mock_settings.digest_timezone = "UTC"
 
             from app.services.scheduler import SchedulerService
+
             service = SchedulerService()
             service.start()
 
             assert service.is_running is True
 
             service.stop()
-
