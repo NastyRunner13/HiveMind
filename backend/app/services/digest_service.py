@@ -351,7 +351,9 @@ class DigestService:
             # Fallback: legacy Slack ID path
             from app.services.membership_service import membership_service
 
-            user_channel_ids = await membership_service.get_user_channel_ids(user_slack_id)
+            user_channel_ids = await membership_service.get_user_channel_ids(
+                user_slack_id
+            )
 
             if not user_channel_ids:
                 logger.info(

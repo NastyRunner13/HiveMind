@@ -48,11 +48,13 @@ class TestShouldContinue:
         # Create an AI message with tool calls
         ai_msg = AIMessage(
             content="",
-            tool_calls=[{
-                "name": "search_knowledge",
-                "args": {"query": "test"},
-                "id": "call_123",
-            }],
+            tool_calls=[
+                {
+                    "name": "search_knowledge",
+                    "args": {"query": "test"},
+                    "id": "call_123",
+                }
+            ],
         )
         state = {
             "messages": [HumanMessage(content="test"), ai_msg],
@@ -117,6 +119,7 @@ class TestGraphConstruction:
             mock_get_llm.return_value = mock_llm
 
             from app.agent.graph import build_agent_graph
+
             graph = build_agent_graph(
                 user_slack_id="U_TEST",
                 user_channel_ids=["C_CHAN1"],
@@ -133,6 +136,7 @@ class TestGraphConstruction:
             mock_get_llm.return_value = mock_llm
 
             from app.agent.graph import build_agent_graph
+
             graph = build_agent_graph(
                 user_slack_id="U_TEST",
                 user_channel_ids=["C_CHAN1"],
@@ -149,6 +153,7 @@ class TestGraphConstruction:
             mock_get_llm.return_value = mock_llm
 
             from app.agent.graph import build_agent_graph
+
             graph1 = build_agent_graph(
                 user_slack_id="U_USER1",
                 user_channel_ids=["C_CHAN1"],
@@ -159,4 +164,3 @@ class TestGraphConstruction:
             )
             # Per-request graphs are NOT the same instance
             assert graph1 is not graph2
-

@@ -15,7 +15,6 @@ if TYPE_CHECKING:
     from app.integrations.base import NormalizedMessage
 
 
-
 class SlackConnector:
     """Slack outbound and synchronization adapter."""
 

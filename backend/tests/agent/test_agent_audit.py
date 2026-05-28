@@ -15,7 +15,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 # Check if asyncpg is available (needed by app.database → agent_service)
 try:
-    import asyncpg
+    import asyncpg  # noqa: F401
 
     HAS_ASYNCPG = True
 except ImportError:

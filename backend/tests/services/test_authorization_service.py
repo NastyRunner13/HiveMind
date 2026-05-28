@@ -42,7 +42,9 @@ def _channel(
     # Make channel_type comparison work for ChannelType.PUBLIC check
     from app.models.channel import ChannelType
 
-    ch.channel_type = ChannelType.PUBLIC if channel_type == "public" else ChannelType.PRIVATE
+    ch.channel_type = (
+        ChannelType.PUBLIC if channel_type == "public" else ChannelType.PRIVATE
+    )
     return ch
 
 

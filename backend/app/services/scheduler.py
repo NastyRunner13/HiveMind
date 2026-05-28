@@ -132,9 +132,7 @@ class SchedulerService:
 
             async with AsyncSessionLocal() as session:
                 ws_result = await session.execute(
-                    select(Workspace)
-                    .where(Workspace.is_active.is_(True))
-                    .limit(1)
+                    select(Workspace).where(Workspace.is_active.is_(True)).limit(1)
                 )
                 workspace = ws_result.scalar_one_or_none()
 

@@ -19,14 +19,15 @@ from app.models.embedding import ACLType, Confidentiality
 
 # Check if asyncpg is available
 try:
-    import asyncpg
+    import asyncpg  # noqa: F401
+
     HAS_ASYNCPG = True
 except ImportError:
     HAS_ASYNCPG = False
 
 skip_without_asyncpg = pytest.mark.skipif(
     not HAS_ASYNCPG,
-    reason="asyncpg not installed — knowledge_service imports app.database"
+    reason="asyncpg not installed — knowledge_service imports app.database",
 )
 
 

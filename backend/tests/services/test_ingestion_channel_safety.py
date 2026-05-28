@@ -16,7 +16,7 @@ import pytest
 
 # Check if asyncpg is available
 try:
-    import asyncpg
+    import asyncpg  # noqa: F401
 
     HAS_ASYNCPG = True
 except ImportError:

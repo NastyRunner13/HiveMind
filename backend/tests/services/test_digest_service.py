@@ -18,14 +18,15 @@ import pytest
 
 # Check if asyncpg is available (needed by app.database → digest_service)
 try:
-    import asyncpg
+    import asyncpg  # noqa: F401
+
     HAS_ASYNCPG = True
 except ImportError:
     HAS_ASYNCPG = False
 
 skip_without_asyncpg = pytest.mark.skipif(
     not HAS_ASYNCPG,
-    reason="asyncpg not installed — digest_service imports app.database"
+    reason="asyncpg not installed — digest_service imports app.database",
 )
 
 
@@ -49,6 +50,7 @@ class TestMessageFormatting:
     def test_format_single_message(self):
         """Single message formats correctly."""
         from app.services.digest_service import DigestService
+
         service = DigestService()
 
         messages = [self._make_message("Hello team!")]
@@ -60,6 +62,7 @@ class TestMessageFormatting:
     def test_format_thread_reply(self):
         """Thread replies are marked with indicator."""
         from app.services.digest_service import DigestService
+
         service = DigestService()
 
         messages = [self._make_message("Reply in thread", is_thread=True)]
@@ -70,6 +73,7 @@ class TestMessageFormatting:
     def test_format_multiple_messages(self):
         """Multiple messages are joined with newlines."""
         from app.services.digest_service import DigestService
+
         service = DigestService()
 
         messages = [
@@ -85,6 +89,7 @@ class TestMessageFormatting:
     def test_format_empty_content(self):
         """Messages with no content get [no content] placeholder."""
         from app.services.digest_service import DigestService
+
         service = DigestService()
 
         messages = [self._make_message(None)]
@@ -106,7 +111,7 @@ class TestSummaryGeneration:
         """Returns None when LLM is not configured."""
         from app.services.digest_service import DigestService
 
-        with patch.object(DigestService, '__init__', lambda self: None):
+        with patch.object(DigestService, "__init__", lambda self: None):
             service = DigestService()
 
             # Mock the settings check
@@ -123,7 +128,7 @@ class TestSummaryGeneration:
         """Returns None when LLM raises an exception."""
         from app.services.digest_service import DigestService
 
-        with patch.object(DigestService, '__init__', lambda self: None):
+        with patch.object(DigestService, "__init__", lambda self: None):
             service = DigestService()
 
             with patch("app.services.digest_service.settings") as mock_settings:
@@ -193,16 +198,10 @@ class TestDigestSafety:
 
         service = DigestService()
 
-        with patch(
-            "app.services.digest_service.AsyncSessionLocal"
-        ) as mock_factory:
+        with patch("app.services.digest_service.AsyncSessionLocal") as mock_factory:
             mock_session = AsyncMock()
-            mock_factory.return_value.__aenter__ = AsyncMock(
-                return_value=mock_session
-            )
-            mock_factory.return_value.__aexit__ = AsyncMock(
-                return_value=None
-            )
+            mock_factory.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+            mock_factory.return_value.__aexit__ = AsyncMock(return_value=None)
 
             # Mock workspace
             workspace = MagicMock()
@@ -216,9 +215,7 @@ class TestDigestSafety:
             ch_result = MagicMock()
             ch_result.scalars.return_value.all.return_value = []
 
-            mock_session.execute = AsyncMock(
-                side_effect=[ws_result, ch_result]
-            )
+            mock_session.execute = AsyncMock(side_effect=[ws_result, ch_result])
             mock_session.get = AsyncMock(return_value=workspace)
 
             result = await service.generate_daily_digest()
@@ -245,24 +242,16 @@ class TestDigestSafety:
         digest.channel_id = uuid.uuid4()  # Has a source channel
 
         with (
-            patch(
-                "app.services.digest_service.AsyncSessionLocal"
-            ) as mock_factory,
+            patch("app.services.digest_service.AsyncSessionLocal") as mock_factory,
             patch("app.services.digest_service.settings") as mock_settings,
-            patch(
-                "app.services.digest_service.event_bus"
-            ) as mock_bus,
+            patch("app.services.digest_service.event_bus") as mock_bus,
         ):
             mock_settings.digest_channel = "global-digest"
             mock_settings.slack_configured = True
 
             mock_session = AsyncMock()
-            mock_factory.return_value.__aenter__ = AsyncMock(
-                return_value=mock_session
-            )
-            mock_factory.return_value.__aexit__ = AsyncMock(
-                return_value=None
-            )
+            mock_factory.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+            mock_factory.return_value.__aexit__ = AsyncMock(return_value=None)
 
             # Source channel lookup
             source_ch = MagicMock()
@@ -270,9 +259,7 @@ class TestDigestSafety:
             mock_session.get = AsyncMock(return_value=source_ch)
 
             # Mock Slack app
-            with patch(
-                "app.slack.bot.get_slack_app"
-            ) as mock_get_app:
+            with patch("app.slack.bot.get_slack_app") as mock_get_app:
                 mock_app = MagicMock()
                 mock_app.client.chat_postMessage = AsyncMock()
                 mock_get_app.return_value = mock_app
@@ -286,4 +273,3 @@ class TestDigestSafety:
                 mock_app.client.chat_postMessage.assert_called_once()
                 call_kwargs = mock_app.client.chat_postMessage.call_args
                 assert call_kwargs.kwargs["channel"] == "C_SOURCE_CHANNEL"
-

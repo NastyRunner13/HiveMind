@@ -73,9 +73,7 @@ def _create_openai_llm(settings) -> BaseChatModel:
     from langchain_openai import ChatOpenAI
 
     if not settings.llm_api_key:
-        raise ValueError(
-            "OpenAI requires LLM_API_KEY. Set it in your .env file."
-        )
+        raise ValueError("OpenAI requires LLM_API_KEY. Set it in your .env file.")
 
     kwargs = {
         "model": settings.llm_model,
@@ -112,9 +110,7 @@ def _create_anthropic_llm(settings) -> BaseChatModel:
     from langchain_anthropic import ChatAnthropic
 
     if not settings.llm_api_key:
-        raise ValueError(
-            "Anthropic requires LLM_API_KEY. Set it in your .env file."
-        )
+        raise ValueError("Anthropic requires LLM_API_KEY. Set it in your .env file.")
 
     return ChatAnthropic(
         model=settings.llm_model,
@@ -169,4 +165,3 @@ def reset_llm() -> None:
     """Reset the cached LLM instance (useful for testing)."""
     global _llm_instance
     _llm_instance = None
-

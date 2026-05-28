@@ -60,9 +60,7 @@ class Digest(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
 
     # ── Metadata ─────────────────────────────────────────────────
-    message_count: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=0
-    )
+    message_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     time_range_start: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
@@ -81,7 +79,4 @@ class Digest(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     channel = relationship("Channel")
 
     def __repr__(self) -> str:
-        return (
-            f"<Digest type={self.digest_type.value!r} "
-            f"messages={self.message_count}>"
-        )
+        return f"<Digest type={self.digest_type.value!r} messages={self.message_count}>"

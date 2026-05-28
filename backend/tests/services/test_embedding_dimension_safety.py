@@ -7,7 +7,6 @@ Verifies that:
 - Error message includes clear migration instructions
 """
 
-
 import pytest
 
 

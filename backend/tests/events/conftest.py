@@ -15,11 +15,13 @@ def mock_redis():
     redis_mock = AsyncMock()
     redis_mock.ping = AsyncMock(return_value=True)
     redis_mock.xadd = AsyncMock(return_value="1234567890-0")
-    redis_mock.xinfo_stream = AsyncMock(return_value={
-        "length": 42,
-        "first-entry": None,
-        "last-entry": None,
-    })
+    redis_mock.xinfo_stream = AsyncMock(
+        return_value={
+            "length": 42,
+            "first-entry": None,
+            "last-entry": None,
+        }
+    )
     redis_mock.aclose = AsyncMock()
     return redis_mock
 

@@ -36,12 +36,9 @@ class TestSyncChannels:
         mock_session.execute = AsyncMock(return_value=ws_result)
 
         with patch("app.database.AsyncSessionLocal") as mock_factory:
-            mock_factory.return_value.__aenter__ = AsyncMock(
-                return_value=mock_session
-            )
+            mock_factory.return_value.__aenter__ = AsyncMock(return_value=mock_session)
             mock_factory.return_value.__aexit__ = AsyncMock(return_value=None)
             yield
-
 
     @pytest.mark.asyncio
     @patch("app.slack.sync._ensure_workspace", new_callable=AsyncMock)

@@ -16,7 +16,7 @@ import pytest
 
 # Check if asyncpg is available (needed by app.database → tools)
 try:
-    import asyncpg
+    import asyncpg  # noqa: F401
 
     HAS_ASYNCPG = True
 except ImportError:
@@ -108,9 +108,7 @@ class TestToolCreation:
                 f"Tool '{t.name}' exposes canonical_channel_ids as an LLM argument"
             )
 
-    def test_tools_with_canonical_do_not_expose_acl_params(
-        self, tools_with_canonical
-    ):
+    def test_tools_with_canonical_do_not_expose_acl_params(self, tools_with_canonical):
         """Tools created with canonical UUIDs should also NOT expose ACL params."""
         for t in tools_with_canonical:
             args = t.args_schema.schema() if t.args_schema else {}
@@ -132,9 +130,7 @@ class TestSearchKnowledgeSecurity:
         """search_knowledge should pass the closed-over user context."""
         search = get_tool_by_name(tools, "search_knowledge")
 
-        with patch(
-            "app.agent.tools.knowledge_service"
-        ) as mock_ks:
+        with patch("app.agent.tools.knowledge_service") as mock_ks:
             mock_ks.search = AsyncMock(return_value=[])
 
             await search.ainvoke({"query": "test query"})
@@ -155,22 +151,14 @@ class TestGetRecentMessagesSecurity:
     """Tests that get_recent_messages enforces channel ACL."""
 
     @pytest.mark.asyncio
-    async def test_denies_access_to_private_channel_user_is_not_in(
-        self, tools
-    ):
+    async def test_denies_access_to_private_channel_user_is_not_in(self, tools):
         """Should deny access to a private channel the user is NOT a member of."""
         get_messages = get_tool_by_name(tools, "get_recent_messages")
 
-        with patch(
-            "app.agent.tools.AsyncSessionLocal"
-        ) as mock_factory:
+        with patch("app.agent.tools.AsyncSessionLocal") as mock_factory:
             mock_session = AsyncMock()
-            mock_factory.return_value.__aenter__ = AsyncMock(
-                return_value=mock_session
-            )
-            mock_factory.return_value.__aexit__ = AsyncMock(
-                return_value=None
-            )
+            mock_factory.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+            mock_factory.return_value.__aexit__ = AsyncMock(return_value=None)
 
             # Mock a private channel the user is NOT a member of
             private_ch = MagicMock()
@@ -188,9 +176,7 @@ class TestGetRecentMessagesSecurity:
             result.scalar_one_or_none.return_value = private_ch
             mock_session.execute = AsyncMock(return_value=result)
 
-            response = await get_messages.ainvoke(
-                {"channel_name": "secret-channel"}
-            )
+            response = await get_messages.ainvoke({"channel_name": "secret-channel"})
 
             # Should return an access denied message
             assert "don't have access" in response.lower()
@@ -205,16 +191,10 @@ class TestListChannelsSecurity:
         """list_channels should include user's channels and public channels."""
         list_ch = get_tool_by_name(tools, "list_channels")
 
-        with patch(
-            "app.agent.tools.AsyncSessionLocal"
-        ) as mock_factory:
+        with patch("app.agent.tools.AsyncSessionLocal") as mock_factory:
             mock_session = AsyncMock()
-            mock_factory.return_value.__aenter__ = AsyncMock(
-                return_value=mock_session
-            )
-            mock_factory.return_value.__aexit__ = AsyncMock(
-                return_value=None
-            )
+            mock_factory.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+            mock_factory.return_value.__aexit__ = AsyncMock(return_value=None)
 
             result_mock = MagicMock()
             result_mock.scalars.return_value.all.return_value = []
@@ -231,22 +211,14 @@ class TestGenerateDigestSecurity:
     """Tests that generate_digest respects channel ACL."""
 
     @pytest.mark.asyncio
-    async def test_denies_digest_for_private_channel_user_is_not_in(
-        self, tools
-    ):
+    async def test_denies_digest_for_private_channel_user_is_not_in(self, tools):
         """Should deny digest generation for private channels user can't access."""
         digest = get_tool_by_name(tools, "generate_digest")
 
-        with patch(
-            "app.agent.tools.AsyncSessionLocal"
-        ) as mock_factory:
+        with patch("app.agent.tools.AsyncSessionLocal") as mock_factory:
             mock_session = AsyncMock()
-            mock_factory.return_value.__aenter__ = AsyncMock(
-                return_value=mock_session
-            )
-            mock_factory.return_value.__aexit__ = AsyncMock(
-                return_value=None
-            )
+            mock_factory.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+            mock_factory.return_value.__aexit__ = AsyncMock(return_value=None)
 
             from app.models.channel import ChannelType
 
@@ -265,13 +237,9 @@ class TestGenerateDigestSecurity:
             ch_result = MagicMock()
             ch_result.scalar_one_or_none.return_value = private_ch
 
-            mock_session.execute = AsyncMock(
-                side_effect=[ws_result, ch_result]
-            )
+            mock_session.execute = AsyncMock(side_effect=[ws_result, ch_result])
             mock_session.get = AsyncMock(return_value=None)
 
-            response = await digest.ainvoke(
-                {"channel_name": "secret-channel"}
-            )
+            response = await digest.ainvoke({"channel_name": "secret-channel"})
 
             assert "don't have access" in response.lower()

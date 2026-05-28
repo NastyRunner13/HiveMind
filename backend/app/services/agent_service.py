@@ -145,9 +145,7 @@ class AgentService:
                         )
                         canonical_channel_ids = [row[0] for row in result.all()]
                 except Exception as e:
-                    logger.warning(
-                        "Failed to resolve canonical channel IDs: %s", e
-                    )
+                    logger.warning("Failed to resolve canonical channel IDs: %s", e)
 
             graph = build_agent_graph(
                 user_slack_id=user_slack_id,

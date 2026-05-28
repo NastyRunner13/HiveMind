@@ -63,7 +63,9 @@ class Settings(BaseSettings):
     # Protected REST endpoints require a bearer token validated via OIDC.
     oidc_issuer_url: str = ""  # e.g., http://localhost:8080/realms/hivemind
     oidc_audience: str = ""  # Client ID / audience claim expected in tokens
-    oidc_discovery_url: str = ""  # Optional; defaults to {issuer}/.well-known/openid-configuration
+    oidc_discovery_url: str = (
+        ""  # Optional; defaults to {issuer}/.well-known/openid-configuration
+    )
 
     @property
     def oidc_configured(self) -> bool:

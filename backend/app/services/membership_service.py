@@ -254,8 +254,7 @@ class MembershipService:
                 )
             )
             canonical_map = {
-                row.external_user_id: row.user_id
-                for row in canonical_result.all()
+                row.external_user_id: row.user_id for row in canonical_result.all()
             }
 
             # Upsert each member

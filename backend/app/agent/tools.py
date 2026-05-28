@@ -89,9 +89,7 @@ def create_tools(
         formatted = []
         for i, r in enumerate(results, 1):
             channel_info = (
-                f" (channel: {r.source_channel_id})"
-                if r.source_channel_id
-                else ""
+                f" (channel: {r.source_channel_id})" if r.source_channel_id else ""
             )
             formatted.append(
                 f"[{i}] (score: {r.score:.2f}, "
@@ -121,9 +119,7 @@ def create_tools(
             since = datetime.now(timezone.utc) - timedelta(hours=hours)
 
             # Find the channel
-            query = select(Channel).where(
-                Channel.name.ilike(f"%{channel_name}%")
-            )
+            query = select(Channel).where(Channel.name.ilike(f"%{channel_name}%"))
             result = await session.execute(query)
             channel = result.scalar_one_or_none()
 
@@ -146,7 +142,6 @@ def create_tools(
                         f"It's a {channel.channel_type.value} channel."
                     )
 
-
             msg_query = (
                 select(Message)
                 .where(
@@ -163,24 +158,18 @@ def create_tools(
             messages = msg_result.scalars().all()
 
             if not messages:
-                return (
-                    f"No messages in #{channel_name} "
-                    f"in the last {hours} hours."
-                )
+                return f"No messages in #{channel_name} in the last {hours} hours."
 
             formatted = []
             for msg in reversed(messages):  # Chronological order
                 ts = msg.sent_at or msg.slack_sent_at
                 time_str = ts.strftime("%H:%M") if ts else "??:??"
-                content = (
-                    msg.content[:200] if msg.content else "[no content]"
-                )
+                content = msg.content[:200] if msg.content else "[no content]"
                 formatted.append(f"[{time_str}] {content}")
 
             return (
                 f"Recent messages in #{channel_name} "
-                f"(last {hours}h, {len(messages)} messages):\n\n"
-                + "\n".join(formatted)
+                f"(last {hours}h, {len(messages)} messages):\n\n" + "\n".join(formatted)
             )
 
     @tool
@@ -201,9 +190,7 @@ def create_tools(
                     Channel.external_channel_id.in_(user_channel_ids)
                 )
             if canonical_channel_ids:
-                membership_conditions.append(
-                    Channel.id.in_(canonical_channel_ids)
-                )
+                membership_conditions.append(Channel.id.in_(canonical_channel_ids))
 
             query = (
                 select(Channel)
@@ -226,9 +213,7 @@ def create_tools(
 
             formatted = []
             for ch in channels:
-                purpose = (
-                    f" — {ch.purpose[:60]}..." if ch.purpose else ""
-                )
+                purpose = f" — {ch.purpose[:60]}..." if ch.purpose else ""
                 ext_id = getattr(ch, "external_channel_id", None)
                 is_member = (
                     ch.slack_channel_id in member_ext_ids
@@ -261,9 +246,7 @@ def create_tools(
         async with AsyncSessionLocal() as session:
             since = datetime.now(timezone.utc) - timedelta(hours=hours)
 
-            query = select(Channel).where(
-                Channel.name.ilike(f"%{channel_name}%")
-            )
+            query = select(Channel).where(Channel.name.ilike(f"%{channel_name}%"))
             result = await session.execute(query)
             channel = result.scalar_one_or_none()
 
@@ -293,14 +276,10 @@ def create_tools(
                     Message.slack_sent_at >= since,
                 ),
             )
-            msg_count = (
-                (await session.execute(count_query)).scalar() or 0
-            )
+            msg_count = (await session.execute(count_query)).scalar() or 0
 
             # Count threads
-            thread_query = select(
-                func.count(func.distinct(Message.thread_ts))
-            ).where(
+            thread_query = select(func.count(func.distinct(Message.thread_ts))).where(
                 Message.channel_id == channel.id,
                 or_(
                     Message.sent_at >= since,
@@ -308,9 +287,7 @@ def create_tools(
                 ),
                 Message.thread_ts.isnot(None),
             )
-            thread_count = (
-                (await session.execute(thread_query)).scalar() or 0
-            )
+            thread_count = (await session.execute(thread_query)).scalar() or 0
 
             return (
                 f"#{channel_name} activity (last {hours}h):\n"
@@ -365,17 +342,13 @@ def create_tools(
                 from app.models.workspace import Workspace
 
                 ws_result = await session.execute(
-                    select(Workspace)
-                    .where(Workspace.is_active.is_(True))
-                    .limit(1)
+                    select(Workspace).where(Workspace.is_active.is_(True)).limit(1)
                 )
                 workspace = ws_result.scalar_one_or_none()
                 if not workspace:
                     return "No active workspace found."
 
-                query = select(Channel).where(
-                    Channel.name.ilike(f"%{channel_name}%")
-                )
+                query = select(Channel).where(Channel.name.ilike(f"%{channel_name}%"))
                 result = await session.execute(query)
                 channel = result.scalar_one_or_none()
 
@@ -423,10 +396,7 @@ def create_tools(
                 parts = [d.content for d in (accessible or digests)]
                 return "Daily Digest:\n\n" + "\n\n---\n\n".join(parts)
             else:
-                return (
-                    "No significant activity across channels "
-                    "in the last 24 hours."
-                )
+                return "No significant activity across channels in the last 24 hours."
 
     return [
         search_knowledge,

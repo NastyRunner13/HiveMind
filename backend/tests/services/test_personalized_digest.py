@@ -15,7 +15,7 @@ import pytest
 
 # Check if asyncpg is available
 try:
-    import asyncpg
+    import asyncpg  # noqa: F401
 
     HAS_ASYNCPG = True
 except ImportError:
@@ -61,9 +61,7 @@ class TestGeneratePersonalizedDigest:
 
         service = DigestService()
 
-        with patch(
-            "app.services.membership_service.membership_service"
-        ) as mock_ms:
+        with patch("app.services.membership_service.membership_service") as mock_ms:
             mock_ms.get_user_channel_ids = AsyncMock(return_value=[])
 
             result = await service.generate_personalized_digest("U_TEST")
@@ -78,12 +76,8 @@ class TestGeneratePersonalizedDigest:
         service = DigestService()
 
         with (
-            patch(
-                "app.services.membership_service.membership_service"
-            ) as mock_ms,
-            patch(
-                "app.services.digest_service.AsyncSessionLocal"
-            ) as mock_factory,
+            patch("app.services.membership_service.membership_service") as mock_ms,
+            patch("app.services.digest_service.AsyncSessionLocal") as mock_factory,
         ):
             mock_ms.get_user_channel_ids = AsyncMock(
                 return_value=["C_PUB_1", "C_PRIV_1"]
@@ -91,9 +85,7 @@ class TestGeneratePersonalizedDigest:
 
             # Mock session — no workspace found
             mock_session = AsyncMock()
-            mock_factory.return_value.__aenter__ = AsyncMock(
-                return_value=mock_session
-            )
+            mock_factory.return_value.__aenter__ = AsyncMock(return_value=mock_session)
             mock_factory.return_value.__aexit__ = AsyncMock(return_value=None)
 
             ws_result = MagicMock()
@@ -112,12 +104,8 @@ class TestGeneratePersonalizedDigest:
         service = DigestService()
 
         with (
-            patch(
-                "app.services.membership_service.membership_service"
-            ) as mock_ms,
-            patch(
-                "app.services.digest_service.AsyncSessionLocal"
-            ) as mock_factory,
+            patch("app.services.membership_service.membership_service") as mock_ms,
+            patch("app.services.digest_service.AsyncSessionLocal") as mock_factory,
         ):
             mock_ms.get_user_channel_ids = AsyncMock(
                 return_value=["C_PUB_1", "C_PRIV_1"]
@@ -125,9 +113,7 @@ class TestGeneratePersonalizedDigest:
 
             # Mock session — workspace found but no channels
             mock_session = AsyncMock()
-            mock_factory.return_value.__aenter__ = AsyncMock(
-                return_value=mock_session
-            )
+            mock_factory.return_value.__aenter__ = AsyncMock(return_value=mock_session)
             mock_factory.return_value.__aexit__ = AsyncMock(return_value=None)
 
             ws = _make_workspace()
@@ -137,9 +123,7 @@ class TestGeneratePersonalizedDigest:
             ch_result = MagicMock()
             ch_result.scalars.return_value.all.return_value = []
 
-            mock_session.execute = AsyncMock(
-                side_effect=[ws_result, ch_result]
-            )
+            mock_session.execute = AsyncMock(side_effect=[ws_result, ch_result])
 
             await service.generate_personalized_digest("U_TEST")
 
@@ -154,21 +138,13 @@ class TestGeneratePersonalizedDigest:
         service = DigestService()
 
         with (
-            patch(
-                "app.services.membership_service.membership_service"
-            ) as mock_ms,
-            patch(
-                "app.services.digest_service.AsyncSessionLocal"
-            ) as mock_factory,
+            patch("app.services.membership_service.membership_service") as mock_ms,
+            patch("app.services.digest_service.AsyncSessionLocal") as mock_factory,
         ):
-            mock_ms.get_user_channel_ids = AsyncMock(
-                return_value=["C_PUB_1"]
-            )
+            mock_ms.get_user_channel_ids = AsyncMock(return_value=["C_PUB_1"])
 
             mock_session = AsyncMock()
-            mock_factory.return_value.__aenter__ = AsyncMock(
-                return_value=mock_session
-            )
+            mock_factory.return_value.__aenter__ = AsyncMock(return_value=mock_session)
             mock_factory.return_value.__aexit__ = AsyncMock(return_value=None)
 
             ws = _make_workspace()
@@ -181,9 +157,7 @@ class TestGeneratePersonalizedDigest:
             ch_result = MagicMock()
             ch_result.scalars.return_value.all.return_value = [ch]
 
-            mock_session.execute = AsyncMock(
-                side_effect=[ws_result, ch_result]
-            )
+            mock_session.execute = AsyncMock(side_effect=[ws_result, ch_result])
 
             # Mock _generate_channel_summary_only to return None (no activity)
             with patch.object(
@@ -204,21 +178,15 @@ class TestGeneratePersonalizedDigest:
         service = DigestService()
 
         with (
-            patch(
-                "app.services.membership_service.membership_service"
-            ) as mock_ms,
-            patch(
-                "app.services.digest_service.AsyncSessionLocal"
-            ) as mock_factory,
+            patch("app.services.membership_service.membership_service") as mock_ms,
+            patch("app.services.digest_service.AsyncSessionLocal") as mock_factory,
         ):
             mock_ms.get_user_channel_ids = AsyncMock(
                 return_value=["C_PUB_1", "C_PRIV_1"]
             )
 
             mock_session = AsyncMock()
-            mock_factory.return_value.__aenter__ = AsyncMock(
-                return_value=mock_session
-            )
+            mock_factory.return_value.__aenter__ = AsyncMock(return_value=mock_session)
             mock_factory.return_value.__aexit__ = AsyncMock(return_value=None)
 
             ws = _make_workspace()
@@ -234,9 +202,7 @@ class TestGeneratePersonalizedDigest:
                 private_ch,
             ]
 
-            mock_session.execute = AsyncMock(
-                side_effect=[ws_result, ch_result]
-            )
+            mock_session.execute = AsyncMock(side_effect=[ws_result, ch_result])
 
             # Mock _generate_channel_summary_only for both channels
             with patch.object(
@@ -265,13 +231,9 @@ class TestGeneratePersonalizedDigestCanonical:
 
         service = DigestService()
 
-        with patch(
-            "app.services.digest_service.AsyncSessionLocal"
-        ) as mock_factory:
+        with patch("app.services.digest_service.AsyncSessionLocal") as mock_factory:
             mock_session = AsyncMock()
-            mock_factory.return_value.__aenter__ = AsyncMock(
-                return_value=mock_session
-            )
+            mock_factory.return_value.__aenter__ = AsyncMock(return_value=mock_session)
             mock_factory.return_value.__aexit__ = AsyncMock(return_value=None)
 
             # Return empty membership list
@@ -297,13 +259,9 @@ class TestGeneratePersonalizedDigestCanonical:
         ch2_id = uuid.uuid4()
         canonical_uid = uuid.uuid4()
 
-        with patch(
-            "app.services.digest_service.AsyncSessionLocal"
-        ) as mock_factory:
+        with patch("app.services.digest_service.AsyncSessionLocal") as mock_factory:
             mock_session = AsyncMock()
-            mock_factory.return_value.__aenter__ = AsyncMock(
-                return_value=mock_session
-            )
+            mock_factory.return_value.__aenter__ = AsyncMock(return_value=mock_session)
             mock_factory.return_value.__aexit__ = AsyncMock(return_value=None)
 
             # First call (membership lookup): return two channel UUIDs
@@ -354,23 +312,15 @@ class TestGeneratePersonalizedDigestCanonical:
 
         service = DigestService()
 
-        with patch(
-            "app.services.membership_service.membership_service"
-        ) as mock_ms:
-            mock_ms.get_user_channel_ids = AsyncMock(
-                return_value=["C_PUB_1"]
-            )
+        with patch("app.services.membership_service.membership_service") as mock_ms:
+            mock_ms.get_user_channel_ids = AsyncMock(return_value=["C_PUB_1"])
 
-            with patch(
-                "app.services.digest_service.AsyncSessionLocal"
-            ) as mock_factory:
+            with patch("app.services.digest_service.AsyncSessionLocal") as mock_factory:
                 mock_session = AsyncMock()
                 mock_factory.return_value.__aenter__ = AsyncMock(
                     return_value=mock_session
                 )
-                mock_factory.return_value.__aexit__ = AsyncMock(
-                    return_value=None
-                )
+                mock_factory.return_value.__aexit__ = AsyncMock(return_value=None)
 
                 ws = _make_workspace()
                 ws_result = MagicMock()
@@ -379,9 +329,7 @@ class TestGeneratePersonalizedDigestCanonical:
                 ch_result = MagicMock()
                 ch_result.scalars.return_value.all.return_value = []
 
-                mock_session.execute = AsyncMock(
-                    side_effect=[ws_result, ch_result]
-                )
+                mock_session.execute = AsyncMock(side_effect=[ws_result, ch_result])
 
                 # No canonical_user_id → should call membership_service
                 await service.generate_personalized_digest("U_TEST")
