@@ -1,13 +1,5 @@
-"""
-Message & File API Endpoints — query ingested messages and file metadata.
+"""Authenticated message and file metadata query endpoints."""
 
-Provides:
-- GET /api/v1/channels/{channel_id}/messages — paginated message list
-- GET /api/v1/messages/search — text search across all messages
-- GET /api/v1/files — list indexed file metadata
-"""
-
-import logging
 import uuid
 from datetime import datetime
 
@@ -16,8 +8,8 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.config import get_settings
 from app.database import get_db
+from app.models.channel import Channel
 from app.models.file_metadata import FileMetadata
 from app.models.message import Message
 from app.schemas.file_metadata import FileListResponse, FileMetadataResponse
@@ -26,81 +18,56 @@ from app.schemas.message import (
     MessageResponse,
     MessageSearchResponse,
 )
-
-logger = logging.getLogger(__name__)
-router = APIRouter()
-settings = get_settings()
-
-
-@router.get(
-    "/channels/{channel_id}/messages",
-    response_model=MessageListResponse,
+from app.security.auth import AuthenticatedPrincipal, get_current_principal
+from app.services.authorization_service import (
+    accessible_channel_condition,
+    require_channel_access,
 )
+
+router = APIRouter()
+
+
+@router.get("/channels/{channel_id}/messages", response_model=MessageListResponse)
 async def list_channel_messages(
     channel_id: uuid.UUID,
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
-    since: datetime | None = Query(
-        None, description="Only messages after this timestamp"
-    ),
-    until: datetime | None = Query(
-        None, description="Only messages before this timestamp"
-    ),
-    threads_only: bool = Query(False, description="Only show thread-starting messages"),
+    since: datetime | None = Query(None),
+    until: datetime | None = Query(None),
+    threads_only: bool = Query(False),
     db: AsyncSession = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
 ) -> MessageListResponse:
-    """
-    Get messages for a specific channel, ordered by time (newest first).
-
-    Supports:
-    - Date range filtering (since/until)
-    - Thread filtering (threads_only=true shows only parent messages)
-    - Pagination
-    - Includes sender info for each message
-    """
+    """List messages only from a channel readable by the principal."""
+    await require_channel_access(db, principal, channel_id)
     query = (
         select(Message)
         .where(Message.channel_id == channel_id)
         .options(selectinload(Message.sender))
     )
     count_query = select(func.count(Message.id)).where(Message.channel_id == channel_id)
-
     if since:
         query = query.where(Message.slack_sent_at >= since)
         count_query = count_query.where(Message.slack_sent_at >= since)
-
     if until:
         query = query.where(Message.slack_sent_at <= until)
         count_query = count_query.where(Message.slack_sent_at <= until)
-
     if threads_only:
-        # Only messages that are NOT thread replies
-        query = query.where(
-            or_(
-                Message.thread_ts.is_(None),
-                Message.thread_ts == Message.slack_message_ts,
-            )
+        thread_root = or_(
+            Message.thread_ts.is_(None), Message.thread_ts == Message.slack_message_ts
         )
-        count_query = count_query.where(
-            or_(
-                Message.thread_ts.is_(None),
-                Message.thread_ts == Message.slack_message_ts,
-            )
-        )
+        query = query.where(thread_root)
+        count_query = count_query.where(thread_root)
 
-    # Get total
-    total_result = await db.execute(count_query)
-    total = total_result.scalar()
-
-    # Apply pagination — newest first
-    offset = (page - 1) * page_size
-    query = query.order_by(Message.slack_sent_at.desc()).offset(offset).limit(page_size)
-
-    result = await db.execute(query)
-    messages = list(result.scalars().all())
-
+    total = (await db.execute(count_query)).scalar() or 0
+    query = (
+        query.order_by(Message.slack_sent_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    messages = list((await db.execute(query)).scalars().all())
     return MessageListResponse(
-        messages=[MessageResponse.model_validate(m) for m in messages],
+        messages=[MessageResponse.model_validate(message) for message in messages],
         total=total,
         page=page,
         page_size=page_size,
@@ -110,46 +77,40 @@ async def list_channel_messages(
 
 @router.get("/messages/search", response_model=MessageSearchResponse)
 async def search_messages(
-    q: str = Query(..., min_length=2, description="Search query"),
+    q: str = Query(..., min_length=2),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    channel_id: uuid.UUID | None = Query(
-        None, description="Limit search to a specific channel"
-    ),
+    channel_id: uuid.UUID | None = Query(None),
     db: AsyncSession = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
 ) -> MessageSearchResponse:
-    """
-    Search messages using PostgreSQL text search (ILIKE for now).
-
-    Future improvement: switch to PostgreSQL full-text search (tsvector)
-    or vector similarity search once embeddings are added.
-    """
-    search_pattern = f"%{q}%"
-
+    """Search only messages in channels readable by the principal."""
+    visibility = await accessible_channel_condition(db, principal)
+    pattern = f"%{q}%"
     query = (
         select(Message)
-        .where(Message.content.ilike(search_pattern))
+        .join(Channel, Message.channel_id == Channel.id)
+        .where(Message.content.ilike(pattern), visibility)
         .options(selectinload(Message.sender))
     )
-    count_query = select(func.count(Message.id)).where(
-        Message.content.ilike(search_pattern)
+    count_query = (
+        select(func.count(Message.id))
+        .join(Channel, Message.channel_id == Channel.id)
+        .where(Message.content.ilike(pattern), visibility)
     )
-
     if channel_id:
+        await require_channel_access(db, principal, channel_id)
         query = query.where(Message.channel_id == channel_id)
         count_query = count_query.where(Message.channel_id == channel_id)
-
-    total_result = await db.execute(count_query)
-    total = total_result.scalar()
-
-    offset = (page - 1) * page_size
-    query = query.order_by(Message.slack_sent_at.desc()).offset(offset).limit(page_size)
-
-    result = await db.execute(query)
-    messages = list(result.scalars().all())
-
+    total = (await db.execute(count_query)).scalar() or 0
+    query = (
+        query.order_by(Message.slack_sent_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    messages = list((await db.execute(query)).scalars().all())
     return MessageSearchResponse(
-        results=[MessageResponse.model_validate(m) for m in messages],
+        results=[MessageResponse.model_validate(message) for message in messages],
         query=q,
         total=total,
         page=page,
@@ -161,49 +122,44 @@ async def search_messages(
 async def list_files(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
-    channel_id: uuid.UUID | None = Query(None, description="Filter by channel"),
-    filetype: str | None = Query(
-        None, description="Filter by file type (e.g., 'pdf', 'png')"
-    ),
-    shared_by: uuid.UUID | None = Query(
-        None, description="Filter by user who shared the file"
-    ),
+    channel_id: uuid.UUID | None = Query(None),
+    filetype: str | None = Query(None),
+    shared_by: uuid.UUID | None = Query(None),
     db: AsyncSession = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
 ) -> FileListResponse:
-    """
-    List indexed file metadata with filtering.
-
-    Note: This returns metadata only — file content is never stored.
-    Files can be filtered by channel, type, or sharing user.
-    """
-    query = select(FileMetadata).options(selectinload(FileMetadata.shared_by))
-    count_query = select(func.count(FileMetadata.id))
-
+    """List file metadata only where its source channel is readable."""
+    visibility = await accessible_channel_condition(db, principal)
+    query = (
+        select(FileMetadata)
+        .join(Channel, FileMetadata.channel_id == Channel.id)
+        .where(visibility)
+        .options(selectinload(FileMetadata.shared_by))
+    )
+    count_query = (
+        select(func.count(FileMetadata.id))
+        .join(Channel, FileMetadata.channel_id == Channel.id)
+        .where(visibility)
+    )
     if channel_id:
+        await require_channel_access(db, principal, channel_id)
         query = query.where(FileMetadata.channel_id == channel_id)
         count_query = count_query.where(FileMetadata.channel_id == channel_id)
-
     if filetype:
         query = query.where(FileMetadata.filetype == filetype)
         count_query = count_query.where(FileMetadata.filetype == filetype)
-
     if shared_by:
         query = query.where(FileMetadata.shared_by_id == shared_by)
         count_query = count_query.where(FileMetadata.shared_by_id == shared_by)
-
-    total_result = await db.execute(count_query)
-    total = total_result.scalar()
-
-    offset = (page - 1) * page_size
+    total = (await db.execute(count_query)).scalar() or 0
     query = (
-        query.order_by(FileMetadata.created_at.desc()).offset(offset).limit(page_size)
+        query.order_by(FileMetadata.created_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
     )
-
-    result = await db.execute(query)
-    files = list(result.scalars().all())
-
+    files = list((await db.execute(query)).scalars().all())
     return FileListResponse(
-        files=[FileMetadataResponse.model_validate(f) for f in files],
+        files=[FileMetadataResponse.model_validate(item) for item in files],
         total=total,
         page=page,
         page_size=page_size,

@@ -12,6 +12,7 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict
 
 from app.models.channel import ChannelType
+from app.models.identity import Platform
 
 
 class ChannelResponse(BaseModel):
@@ -21,6 +22,9 @@ class ChannelResponse(BaseModel):
 
     id: uuid.UUID
     slack_channel_id: str
+    platform: Platform = Platform.SLACK
+    external_channel_id: str | None = None
+    workspace_integration_id: uuid.UUID | None = None
     name: str
     channel_type: ChannelType
     topic: str | None = None

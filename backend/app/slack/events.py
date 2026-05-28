@@ -289,10 +289,12 @@ def register_event_handlers(app: AsyncApp) -> None:
             return
 
         # ── Default: AI Agent ────────────────────────────────────
+        from app.security.auth import resolve_slack_principal
         from app.services.agent_service import agent_service
 
         # Derive trusted ACL context from DB — NOT from client
         user_channel_ids = await _get_membership_service().get_user_channel_ids(user)
+        principal = await resolve_slack_principal(user)
 
         response = await agent_service.process_message(
             user_slack_id=user,
@@ -300,6 +302,8 @@ def register_event_handlers(app: AsyncApp) -> None:
             channel_id=channel,
             thread_ts=thread_ts,
             user_channel_ids=user_channel_ids,
+            canonical_user_id=principal.user_id if principal else None,
+            workspace_id=principal.workspace_id if principal else None,
         )
 
         # Reply in thread
@@ -354,7 +358,9 @@ async def _handle_digest_command(
     channel_name = None
     if parts:
         # Check for Slack mention format: <#C0B5W4HHHEE|social> or <#C0B5W4HHHEE>
-        mention_match = re.match(r"^<#([A-Z0-9]+)(?:\|([^>]+))?>$", parts, re.IGNORECASE)
+        mention_match = re.match(
+            r"^<#([A-Z0-9]+)(?:\|([^>]+))?>$", parts, re.IGNORECASE
+        )
         if mention_match:
             channel_id = mention_match.group(1).upper()
             channel_name = mention_match.group(2)
@@ -426,7 +432,9 @@ async def _handle_digest_command(
                     )
                 ch = ch_result.scalar_one_or_none()
                 if not ch:
-                    display_name = f"#{channel_name}" if channel_name else f"<#{channel_id}>"
+                    display_name = (
+                        f"#{channel_name}" if channel_name else f"<#{channel_id}>"
+                    )
                     await say(
                         text=f"❌ Channel `{display_name}` not found.",
                         thread_ts=thread_ts,
@@ -437,8 +445,10 @@ async def _handle_digest_command(
                 from app.models.channel import ChannelType
 
                 if ch.channel_type != ChannelType.PUBLIC:
-                    user_channels = await _get_membership_service().get_user_channel_ids(
-                        user_slack_id
+                    user_channels = (
+                        await _get_membership_service().get_user_channel_ids(
+                            user_slack_id
+                        )
                     )
                     if ch.slack_channel_id not in user_channels:
                         await say(

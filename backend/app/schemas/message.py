@@ -7,6 +7,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
 
+from app.models.identity import Platform
 from app.models.message import MessageType
 
 
@@ -30,6 +31,9 @@ class MessageResponse(BaseModel):
     channel_id: uuid.UUID
     slack_message_ts: str
     thread_ts: str | None = None
+    platform: Platform = Platform.SLACK
+    external_message_id: str | None = None
+    external_thread_id: str | None = None
     content: str
     message_type: MessageType
     has_attachments: bool = False
@@ -38,6 +42,7 @@ class MessageResponse(BaseModel):
     reply_count: int = 0
     is_edited: bool = False
     slack_sent_at: datetime
+    sent_at: datetime | None = None
     created_at: datetime
 
     # Nested sender info (populated via relationship)

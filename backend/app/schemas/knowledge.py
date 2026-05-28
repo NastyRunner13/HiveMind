@@ -3,7 +3,6 @@ Knowledge Fabric Pydantic schemas — request/response models for search API.
 """
 
 import uuid
-from datetime import datetime
 
 from pydantic import BaseModel, Field
 
@@ -11,8 +10,12 @@ from pydantic import BaseModel, Field
 class SearchRequest(BaseModel):
     """Request body for semantic search."""
 
-    query: str = Field(..., min_length=1, max_length=1000, description="Natural language search query")
-    top_k: int = Field(default=10, ge=1, le=50, description="Number of results to return")
+    query: str = Field(
+        ..., min_length=1, max_length=1000, description="Natural language search query"
+    )
+    top_k: int = Field(
+        default=10, ge=1, le=50, description="Number of results to return"
+    )
 
 
 class SearchResultItem(BaseModel):
@@ -24,6 +27,7 @@ class SearchResultItem(BaseModel):
     source_type: str
     source_id: uuid.UUID
     source_channel_id: str | None = None
+    source_channel_uuid: uuid.UUID | None = None
     chunk_index: int
 
 
