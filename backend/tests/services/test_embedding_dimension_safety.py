@@ -7,7 +7,6 @@ Verifies that:
 - Error message includes clear migration instructions
 """
 
-from unittest.mock import patch
 
 import pytest
 

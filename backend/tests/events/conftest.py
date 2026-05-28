@@ -4,7 +4,7 @@ Event Bus test fixtures — Redis mocks for unit testing.
 All tests use mocked Redis connections so no real Redis instance is needed.
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 

@@ -8,11 +8,9 @@ Tests cover:
 - Graph singleton behavior
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
-import pytest
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
-
+from langchain_core.messages import AIMessage, HumanMessage
 
 # ═════════════════════════════════════════════════════════════════
 # STATE DEFINITION
@@ -31,6 +29,8 @@ class TestAgentState:
         assert "messages" in annotations
         assert "user_slack_id" in annotations
         assert "user_channel_ids" in annotations
+        assert "canonical_user_id" in annotations
+        assert "canonical_channel_ids" in annotations
 
 
 # ═════════════════════════════════════════════════════════════════
@@ -58,6 +58,8 @@ class TestShouldContinue:
             "messages": [HumanMessage(content="test"), ai_msg],
             "user_slack_id": "U123",
             "user_channel_ids": [],
+            "canonical_user_id": None,
+            "canonical_channel_ids": None,
         }
 
         result = should_continue(state)
@@ -74,6 +76,8 @@ class TestShouldContinue:
             "messages": [HumanMessage(content="test"), ai_msg],
             "user_slack_id": "U123",
             "user_channel_ids": [],
+            "canonical_user_id": None,
+            "canonical_channel_ids": None,
         }
 
         result = should_continue(state)
@@ -89,6 +93,8 @@ class TestShouldContinue:
             "messages": [HumanMessage(content="test")],
             "user_slack_id": "U123",
             "user_channel_ids": [],
+            "canonical_user_id": None,
+            "canonical_channel_ids": None,
         }
 
         result = should_continue(state)
@@ -114,6 +120,24 @@ class TestGraphConstruction:
             graph = build_agent_graph(
                 user_slack_id="U_TEST",
                 user_channel_ids=["C_CHAN1"],
+            )
+            assert graph is not None
+
+    def test_build_agent_graph_with_canonical_ids(self):
+        """build_agent_graph() accepts canonical UUID parameters."""
+        import uuid as uuid_mod
+
+        with patch("app.agent.graph.get_llm") as mock_get_llm:
+            mock_llm = MagicMock()
+            mock_llm.bind_tools = MagicMock(return_value=mock_llm)
+            mock_get_llm.return_value = mock_llm
+
+            from app.agent.graph import build_agent_graph
+            graph = build_agent_graph(
+                user_slack_id="U_TEST",
+                user_channel_ids=["C_CHAN1"],
+                canonical_user_id=uuid_mod.uuid4(),
+                canonical_channel_ids=[uuid_mod.uuid4()],
             )
             assert graph is not None
 

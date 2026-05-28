@@ -4,10 +4,10 @@ Agent test fixtures — LLM and graph mocks for unit testing.
 All tests use mocked LLM instances so no real API keys are needed.
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage
 
 
 @pytest.fixture

@@ -10,11 +10,9 @@ Tests cover:
 - Mention cleaning
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
-import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
-
 
 # ═════════════════════════════════════════════════════════════════
 # AGENT SERVICE

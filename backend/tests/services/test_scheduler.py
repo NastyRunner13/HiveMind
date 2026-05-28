@@ -11,10 +11,7 @@ Note: APScheduler's AsyncIOScheduler needs an event loop, so
 scheduler.start() tests must be async.
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
-
+from unittest.mock import patch
 
 # ═════════════════════════════════════════════════════════════════
 # SCHEDULER LIFECYCLE

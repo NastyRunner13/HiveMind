@@ -14,11 +14,10 @@ import pytest
 from app.services.embedding_service import (
     EmbeddingService,
     LocalEmbeddingProvider,
+    _chunk_by_chars,
     chunk_text,
     count_tokens,
-    _chunk_by_chars,
 )
-
 
 # ═════════════════════════════════════════════════════════════════
 # TEXT CHUNKING
@@ -147,7 +146,7 @@ class TestProviderInit:
 
     def test_unsupported_provider_raises(self):
         """Unsupported provider raises ValueError."""
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import patch
 
         with patch("app.services.embedding_service.settings") as mock_settings:
             mock_settings.embedding_provider = "unsupported"

@@ -241,8 +241,6 @@ class TestHandleAppMention:
     async def test_app_mention_say_response(self, sample_app_mention_event):
         """The handler should call say() with the agent's response."""
         mock_say = AsyncMock()
-        user = sample_app_mention_event["user"]
-
         # Simulate what the updated handler does — it calls agent_service
         # and posts the response. We test that say() is called with content.
         response_text = "🐝 Here's what I found about your question..."
@@ -271,9 +269,9 @@ class TestHandleDigestCommand:
         self, mock_session_cls, mock_digest_service
     ):
         """Should correctly parse a Slack channel mention and query by slack_channel_id."""
-        from app.slack.events import _handle_digest_command
         from app.models.channel import Channel, ChannelType
         from app.models.workspace import Workspace
+        from app.slack.events import _handle_digest_command
 
         # Mock say
         mock_say = AsyncMock()
@@ -337,9 +335,9 @@ class TestHandleDigestCommand:
         self, mock_session_cls, mock_digest_service
     ):
         """Should correctly parse a plain channel name and query by name ILIKE."""
-        from app.slack.events import _handle_digest_command
         from app.models.channel import Channel, ChannelType
         from app.models.workspace import Workspace
+        from app.slack.events import _handle_digest_command
 
         # Mock say
         mock_say = AsyncMock()

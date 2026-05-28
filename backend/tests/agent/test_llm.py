@@ -13,7 +13,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-
 # ═════════════════════════════════════════════════════════════════
 # PROVIDER VALIDATION
 # ═════════════════════════════════════════════════════════════════
@@ -35,7 +34,7 @@ class TestProviderValidation:
                 llm_api_key="key",
             )
 
-            from app.agent.llm import reset_llm, get_llm
+            from app.agent.llm import get_llm, reset_llm
             reset_llm()
 
             with pytest.raises(ValueError, match="Unsupported LLM provider"):
@@ -49,7 +48,7 @@ class TestProviderValidation:
                 llm_api_key="",
             )
 
-            from app.agent.llm import reset_llm, get_llm
+            from app.agent.llm import get_llm, reset_llm
             reset_llm()
 
             with pytest.raises(ValueError, match="OpenAI requires LLM_API_KEY"):
@@ -63,7 +62,7 @@ class TestProviderValidation:
                 llm_api_key="",
             )
 
-            from app.agent.llm import reset_llm, get_llm
+            from app.agent.llm import get_llm, reset_llm
             reset_llm()
 
             with pytest.raises(ValueError, match="Google Gemini requires LLM_API_KEY"):
@@ -77,7 +76,7 @@ class TestProviderValidation:
                 llm_api_key="",
             )
 
-            from app.agent.llm import reset_llm, get_llm
+            from app.agent.llm import get_llm, reset_llm
             reset_llm()
 
             with pytest.raises(ValueError, match="Anthropic requires LLM_API_KEY"):
@@ -92,7 +91,7 @@ class TestProviderValidation:
                 llm_base_url="",
             )
 
-            from app.agent.llm import reset_llm, get_llm
+            from app.agent.llm import get_llm, reset_llm
             reset_llm()
 
             with pytest.raises(ValueError, match="OpenRouter requires LLM_API_KEY"):
@@ -107,7 +106,7 @@ class TestProviderValidation:
                 llm_temperature=0.3,
             )
 
-            from app.agent.llm import reset_llm, get_llm
+            from app.agent.llm import get_llm, reset_llm
             reset_llm()
 
             # Should not raise — Ollama doesn't need a key
@@ -166,7 +165,7 @@ class TestLLMCache:
                 llm_temperature=0.3,
             )
 
-            from app.agent.llm import reset_llm, get_llm
+            from app.agent.llm import get_llm, reset_llm
             reset_llm()
             llm = get_llm()
             assert llm is not None

@@ -6,7 +6,6 @@ ACL context for knowledge search and agent tool authorization.
 """
 
 import uuid
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -140,8 +139,12 @@ class TestHandleMemberJoined:
             user_result = MagicMock()
             user_result.scalar_one_or_none.return_value = user_id
 
+            # Mock canonical user lookup (via UserPlatformMapping)
+            canonical_result = MagicMock()
+            canonical_result.scalar_one_or_none.return_value = user_id
+
             mock_session.execute = AsyncMock(
-                side_effect=[ws_result, ch_result, user_result, MagicMock()]
+                side_effect=[ws_result, ch_result, user_result, canonical_result, MagicMock()]
             )
             mock_session.commit = AsyncMock()
 
@@ -249,8 +252,18 @@ class TestSyncChannelMembers:
             user_result = MagicMock()
             user_result.all.return_value = [user_row_1, user_row_2]
 
+            # Mock canonical user mapping lookup
+            canonical_row_1 = MagicMock()
+            canonical_row_1.external_user_id = "U111"
+            canonical_row_1.user_id = user_id_1
+            canonical_row_2 = MagicMock()
+            canonical_row_2.external_user_id = "U222"
+            canonical_row_2.user_id = user_id_2
+            canonical_result = MagicMock()
+            canonical_result.all.return_value = [canonical_row_1, canonical_row_2]
+
             mock_session.execute = AsyncMock(
-                side_effect=[ch_result, user_result]
+                side_effect=[ch_result, user_result, canonical_result]
                 + [MagicMock()] * 3  # upserts + deactivation
             )
             mock_session.commit = AsyncMock()

@@ -9,13 +9,9 @@ Tests cover:
 """
 
 import json
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 
-import pytest
-
 from app.events.bus import EventBus, EventType
-
 
 # ═════════════════════════════════════════════════════════════════
 # CONNECTION LIFECYCLE

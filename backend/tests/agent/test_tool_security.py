@@ -10,7 +10,6 @@ is properly denied when a user lacks authorization.
 """
 
 import uuid
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -43,6 +42,21 @@ def tools(user_channel_ids):
     return create_tools(
         user_slack_id="U_TEST_USER",
         user_channel_ids=user_channel_ids,
+    )
+
+
+@pytest.fixture
+def tools_with_canonical(user_channel_ids):
+    """Create tools scoped to our test user with canonical UUIDs."""
+    import uuid as uuid_mod
+
+    from app.agent.tools import create_tools
+
+    return create_tools(
+        user_slack_id="U_TEST_USER",
+        user_channel_ids=user_channel_ids,
+        canonical_user_id=uuid_mod.uuid4(),
+        canonical_channel_ids=[uuid_mod.uuid4(), uuid_mod.uuid4()],
     )
 
 
@@ -86,6 +100,26 @@ class TestToolCreation:
             )
             assert "channel_ids" not in properties, (
                 f"Tool '{t.name}' exposes channel_ids as an LLM argument"
+            )
+            assert "canonical_user_id" not in properties, (
+                f"Tool '{t.name}' exposes canonical_user_id as an LLM argument"
+            )
+            assert "canonical_channel_ids" not in properties, (
+                f"Tool '{t.name}' exposes canonical_channel_ids as an LLM argument"
+            )
+
+    def test_tools_with_canonical_do_not_expose_acl_params(
+        self, tools_with_canonical
+    ):
+        """Tools created with canonical UUIDs should also NOT expose ACL params."""
+        for t in tools_with_canonical:
+            args = t.args_schema.schema() if t.args_schema else {}
+            properties = args.get("properties", {})
+            assert "canonical_user_id" not in properties, (
+                f"Tool '{t.name}' exposes canonical_user_id as an LLM argument"
+            )
+            assert "canonical_channel_ids" not in properties, (
+                f"Tool '{t.name}' exposes canonical_channel_ids as an LLM argument"
             )
 
 
