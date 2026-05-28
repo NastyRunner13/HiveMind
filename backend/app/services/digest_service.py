@@ -15,8 +15,7 @@ import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import and_, func, select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import and_, select
 
 from app.config import get_settings
 from app.database import AsyncSessionLocal
@@ -132,12 +131,15 @@ class DigestService:
             await session.commit()
             await session.refresh(digest)
 
-            await event_bus.publish(EventType.DIGEST_GENERATED, {
-                "digest_id": str(digest.id),
-                "channel_name": channel.name,
-                "message_count": len(messages),
-                "digest_type": digest_type.value,
-            })
+            await event_bus.publish(
+                EventType.DIGEST_GENERATED,
+                {
+                    "digest_id": str(digest.id),
+                    "channel_name": channel.name,
+                    "message_count": len(messages),
+                    "digest_type": digest_type.value,
+                },
+            )
 
             logger.info(
                 f"Generated {digest_type.value} digest for #{channel.name}: "
@@ -165,9 +167,7 @@ class DigestService:
                 workspace = await session.get(Workspace, workspace_id)
             else:
                 result = await session.execute(
-                    select(Workspace)
-                    .where(Workspace.is_active.is_(True))
-                    .limit(1)
+                    select(Workspace).where(Workspace.is_active.is_(True)).limit(1)
                 )
                 workspace = result.scalar_one_or_none()
 
@@ -237,11 +237,17 @@ class DigestService:
                 async with AsyncSessionLocal() as session:
                     source_channel = await session.get(Channel, digest.channel_id)
                     if source_channel:
-                        target_channel = source_channel.slack_channel_id
+                        external_channel_id = getattr(
+                            source_channel, "external_channel_id", None
+                        )
+                        target_channel = (
+                            external_channel_id
+                            if isinstance(external_channel_id, str)
+                            and external_channel_id
+                            else source_channel.slack_channel_id
+                        )
             except Exception as e:
-                logger.warning(
-                    f"Could not resolve source channel for digest: {e}"
-                )
+                logger.warning(f"Could not resolve source channel for digest: {e}")
 
         channel = target_channel or settings.digest_channel
         if not channel:
@@ -253,22 +259,23 @@ class DigestService:
             return False
 
         try:
+            from app.integrations.slack.connector import SlackConnector
             from app.slack.bot import get_slack_app
 
             slack_app = get_slack_app()
             if not slack_app:
                 return False
 
-            await slack_app.client.chat_postMessage(
-                channel=channel,
-                text=digest.content,
-                unfurl_links=False,
-            )
+            connector = SlackConnector(slack_app.client)
+            await connector.send_external_message(channel, digest.content)
 
-            await event_bus.publish(EventType.DIGEST_DELIVERED, {
-                "digest_id": str(digest.id),
-                "channel": channel,
-            })
+            await event_bus.publish(
+                EventType.DIGEST_DELIVERED,
+                {
+                    "digest_id": str(digest.id),
+                    "channel": channel,
+                },
+            )
 
             logger.info(f"Digest delivered to {channel}")
             return True
@@ -284,6 +291,7 @@ class DigestService:
     async def generate_personalized_digest(
         self,
         user_slack_id: str,
+        canonical_user_id: uuid.UUID | None = None,
         hours: int = 24,
     ) -> str | None:
         """
@@ -300,50 +308,88 @@ class DigestService:
         endpoints (GET /api/v1/digests), which return stored digests
         without per-user ACL checks.
 
+        Supports dual-path identity resolution:
+        - canonical_user_id (preferred): Looks up memberships via
+          ChannelMembership.canonical_user_id and filters channels by
+          Channel.id (internal UUID).
+        - user_slack_id (fallback): Legacy Slack ID path using
+          membership_service.get_user_channel_ids().
+
         Args:
             user_slack_id: The Slack user ID requesting the digest.
+            canonical_user_id: Internal user UUID (OIDC path, preferred).
             hours: How many hours of history to summarize.
 
         Returns:
             Combined digest string, or None if no activity.
         """
-        from app.services.membership_service import membership_service
+        # --- Resolve channel access ---
+        canonical_channel_ids: list[uuid.UUID] | None = None
 
-        # Get all channels the user is a member of
-        user_channel_ids = await membership_service.get_user_channel_ids(
-            user_slack_id
-        )
+        if canonical_user_id:
+            # Preferred path: canonical UUID membership lookup
+            from app.models.membership import ChannelMembership
 
-        if not user_channel_ids:
-            logger.info(
-                f"No channel memberships for {user_slack_id} — "
-                f"cannot generate personalized digest"
-            )
-            return None
+            async with AsyncSessionLocal() as session:
+                result = await session.execute(
+                    select(ChannelMembership.channel_id).where(
+                        and_(
+                            ChannelMembership.canonical_user_id == canonical_user_id,
+                            ChannelMembership.is_active.is_(True),
+                        )
+                    )
+                )
+                canonical_channel_ids = [row[0] for row in result.all()]
+
+            if not canonical_channel_ids:
+                logger.info(
+                    f"No canonical memberships for {canonical_user_id} — "
+                    f"cannot generate personalized digest"
+                )
+                return None
+        else:
+            # Fallback: legacy Slack ID path
+            from app.services.membership_service import membership_service
+
+            user_channel_ids = await membership_service.get_user_channel_ids(user_slack_id)
+
+            if not user_channel_ids:
+                logger.info(
+                    f"No channel memberships for {user_slack_id} — "
+                    f"cannot generate personalized digest"
+                )
+                return None
 
         async with AsyncSessionLocal() as session:
             # Find the workspace
             result = await session.execute(
-                select(Workspace)
-                .where(Workspace.is_active.is_(True))
-                .limit(1)
+                select(Workspace).where(Workspace.is_active.is_(True)).limit(1)
             )
             workspace = result.scalar_one_or_none()
 
             if not workspace:
-                logger.warning(
-                    "No active workspace found for personalized digest"
-                )
+                logger.warning("No active workspace found for personalized digest")
                 return None
 
-            # Get all channels the user is in (public + private)
-            channel_query = select(Channel).where(
-                and_(
-                    Channel.workspace_id == workspace.id,
-                    Channel.is_archived.is_(False),
-                    Channel.slack_channel_id.in_(user_channel_ids),
+            # Get channels the user is in (public + private)
+            if canonical_channel_ids is not None:
+                # UUID path: filter by Channel.id
+                channel_query = select(Channel).where(
+                    and_(
+                        Channel.workspace_id == workspace.id,
+                        Channel.is_archived.is_(False),
+                        Channel.id.in_(canonical_channel_ids),
+                    )
                 )
-            )
+            else:
+                # Slack ID path: filter by slack_channel_id
+                channel_query = select(Channel).where(
+                    and_(
+                        Channel.workspace_id == workspace.id,
+                        Channel.is_archived.is_(False),
+                        Channel.slack_channel_id.in_(user_channel_ids),
+                    )
+                )
             result = await session.execute(channel_query)
             channels = result.scalars().all()
 
@@ -361,21 +407,19 @@ class DigestService:
                     hours=hours,
                 )
                 if summary:
-                    digest_parts.append(
-                        f"**#{channel.name}**\n{summary}"
-                    )
+                    digest_parts.append(f"**#{channel.name}**\n{summary}")
             except Exception as e:
                 logger.error(
-                    f"Failed to generate personalized digest for "
-                    f"#{channel.name}: {e}",
+                    f"Failed to generate personalized digest for #{channel.name}: {e}",
                     exc_info=True,
                 )
 
         if not digest_parts:
             return None
 
+        identity_label = str(canonical_user_id) if canonical_user_id else user_slack_id
         logger.info(
-            f"Personalized digest for {user_slack_id}: "
+            f"Personalized digest for {identity_label}: "
             f"{len(digest_parts)} channel summaries"
         )
         return "\n\n---\n\n".join(digest_parts)
@@ -480,10 +524,12 @@ class DigestService:
 
             from langchain_core.messages import HumanMessage, SystemMessage
 
-            response = await llm.ainvoke([
-                SystemMessage(content=DIGEST_SYSTEM_PROMPT),
-                HumanMessage(content=prompt),
-            ])
+            response = await llm.ainvoke(
+                [
+                    SystemMessage(content=DIGEST_SYSTEM_PROMPT),
+                    HumanMessage(content=prompt),
+                ]
+            )
 
             return response.content
 

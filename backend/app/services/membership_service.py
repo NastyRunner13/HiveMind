@@ -23,6 +23,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.database import AsyncSessionLocal
 from app.models.channel import Channel
+from app.models.identity import Platform, UserPlatformMapping
 from app.models.membership import ChannelMembership
 from app.models.user import SlackUser
 from app.models.workspace import Workspace
@@ -71,9 +72,7 @@ class MembershipService:
                 )
             )
             if workspace_id:
-                query = query.where(
-                    ChannelMembership.workspace_id == workspace_id
-                )
+                query = query.where(ChannelMembership.workspace_id == workspace_id)
 
             result = await session.execute(query)
             return [row[0] for row in result.all()]
@@ -113,8 +112,7 @@ class MembershipService:
             channel_id = ch_result.scalar_one_or_none()
             if not channel_id:
                 logger.debug(
-                    f"Channel {slack_channel_id} not found — "
-                    f"skipping membership record"
+                    f"Channel {slack_channel_id} not found — skipping membership record"
                 )
                 return
 
@@ -128,16 +126,26 @@ class MembershipService:
             user_id = user_result.scalar_one_or_none()
             if not user_id:
                 logger.debug(
-                    f"User {slack_user_id} not found — "
-                    f"skipping membership record"
+                    f"User {slack_user_id} not found — skipping membership record"
                 )
                 return
+
+            # Resolve canonical user ID via platform mapping
+            canonical_result = await session.execute(
+                select(UserPlatformMapping.user_id).where(
+                    UserPlatformMapping.external_user_id == slack_user_id,
+                    UserPlatformMapping.platform == Platform.SLACK,
+                    UserPlatformMapping.is_active.is_(True),
+                )
+            )
+            canonical_user_id = canonical_result.scalar_one_or_none()
 
             # Upsert: insert or reactivate on conflict
             stmt = pg_insert(ChannelMembership).values(
                 workspace_id=workspace.id,
                 channel_id=channel_id,
                 user_id=user_id,
+                canonical_user_id=canonical_user_id or user_id,
                 slack_channel_id=slack_channel_id,
                 slack_user_id=slack_user_id,
                 is_active=True,
@@ -234,6 +242,22 @@ class MembershipService:
             )
             user_map = {row.slack_user_id: row.id for row in user_result.all()}
 
+            # Resolve canonical user IDs via platform mappings
+            canonical_result = await session.execute(
+                select(
+                    UserPlatformMapping.external_user_id,
+                    UserPlatformMapping.user_id,
+                ).where(
+                    UserPlatformMapping.external_user_id.in_(member_slack_ids),
+                    UserPlatformMapping.platform == Platform.SLACK,
+                    UserPlatformMapping.is_active.is_(True),
+                )
+            )
+            canonical_map = {
+                row.external_user_id: row.user_id
+                for row in canonical_result.all()
+            }
+
             # Upsert each member
             now = datetime.now(timezone.utc)
             for slack_uid in member_slack_ids:
@@ -245,6 +269,7 @@ class MembershipService:
                     workspace_id=workspace_id,
                     channel_id=channel_id,
                     user_id=user_id,
+                    canonical_user_id=canonical_map.get(slack_uid, user_id),
                     slack_channel_id=slack_channel_id,
                     slack_user_id=slack_uid,
                     is_active=True,
@@ -268,9 +293,7 @@ class MembershipService:
                             ChannelMembership.channel_id == channel_id,
                             ChannelMembership.workspace_id == workspace_id,
                             ChannelMembership.is_active.is_(True),
-                            ChannelMembership.slack_user_id.notin_(
-                                member_slack_ids
-                            ),
+                            ChannelMembership.slack_user_id.notin_(member_slack_ids),
                         )
                     )
                     .values(is_active=False)
@@ -333,9 +356,7 @@ class MembershipService:
                         break
 
                     member_ids.extend(result.get("members", []))
-                    cursor = (
-                        result.get("response_metadata", {}).get("next_cursor")
-                    )
+                    cursor = result.get("response_metadata", {}).get("next_cursor")
                     if not cursor:
                         break
 
@@ -350,8 +371,7 @@ class MembershipService:
 
             except Exception as e:
                 logger.error(
-                    f"Failed to sync members for "
-                    f"#{channel.name}: {e}",
+                    f"Failed to sync members for #{channel.name}: {e}",
                     exc_info=True,
                 )
 
