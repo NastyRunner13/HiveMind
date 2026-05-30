@@ -93,6 +93,11 @@ class Settings(BaseSettings):
     llm_temperature: float = 0.3
     llm_max_tokens: int = 2048
 
+    # Agent runtime controls
+    agent_max_iterations: int = 3
+    agent_timeout_seconds: float = 45.0
+    agent_tool_timeout_seconds: float = 20.0
+
     @property
     def llm_configured(self) -> bool:
         """Check if LLM credentials are provided (Ollama doesn't need a key)."""
