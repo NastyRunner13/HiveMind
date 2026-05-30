@@ -90,12 +90,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index(
-        "ix_document_chunks_source_author_id", table_name="document_chunks"
-    )
-    op.drop_index(
-        "ix_document_chunks_source_created_at", table_name="document_chunks"
-    )
+    op.drop_index("ix_document_chunks_source_author_id", table_name="document_chunks")
+    op.drop_index("ix_document_chunks_source_created_at", table_name="document_chunks")
     op.drop_column("document_chunks", "source_permalink")
     op.drop_column("document_chunks", "source_thread_id")
     op.drop_column("document_chunks", "source_author_external_id")
