@@ -11,6 +11,7 @@ This service bridges Slack events with the LangGraph agent. It:
 All agent interactions are logged but never stored with sensitive content.
 """
 
+import asyncio
 import json
 import logging
 import uuid
@@ -24,6 +25,44 @@ from app.events.bus import EventType, event_bus
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
+
+DEFAULT_AGENT_MAX_ITERATIONS = 3
+DEFAULT_AGENT_TIMEOUT_SECONDS = 45.0
+MIN_AGENT_MAX_ITERATIONS = 1
+MAX_AGENT_MAX_ITERATIONS = 8
+MIN_AGENT_TIMEOUT_SECONDS = 1.0
+MAX_AGENT_TIMEOUT_SECONDS = 120.0
+
+
+def _bounded_int_setting(
+    value: object,
+    *,
+    default: int,
+    minimum: int,
+    maximum: int,
+) -> int:
+    """Read an integer setting defensively when tests patch settings."""
+    if not isinstance(value, int) or isinstance(value, bool):
+        return default
+    return max(minimum, min(value, maximum))
+
+
+def _bounded_float_setting(
+    value: object,
+    *,
+    default: float,
+    minimum: float,
+    maximum: float,
+) -> float:
+    """Read a float setting defensively when tests patch settings."""
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return default
+    return max(minimum, min(float(value), maximum))
+
+
+def _recursion_limit_for_iterations(max_iterations: int) -> int:
+    """Translate ReAct tool-use rounds into a LangGraph recursion limit."""
+    return (max_iterations * 2) + 2
 
 
 @dataclass
@@ -117,6 +156,20 @@ class AgentService:
             },
         )
 
+        if workspace_id is None:
+            logger.warning(
+                "Agent request for Slack user %s had no resolved workspace; "
+                "retrieval denied",
+                user_slack_id,
+            )
+            return AgentResponse(
+                content=(
+                    "I couldn't verify your workspace identity, so I can't search "
+                    "or summarize workspace data for this request."
+                ),
+                error="Workspace not resolved",
+            )
+
         try:
             # Build a per-request graph with user-scoped tools
             # The graph creates tools that close over trusted ACL context
@@ -150,6 +203,7 @@ class AgentService:
             graph = build_agent_graph(
                 user_slack_id=user_slack_id,
                 user_channel_ids=user_channel_ids or [],
+                workspace_id=workspace_id,
                 canonical_user_id=canonical_user_id,
                 canonical_channel_ids=canonical_channel_ids,
             )
@@ -165,12 +219,51 @@ class AgentService:
                 ],
                 "user_slack_id": user_slack_id,
                 "user_channel_ids": user_channel_ids or [],
+                "workspace_id": workspace_id,
                 "canonical_user_id": canonical_user_id,
                 "canonical_channel_ids": canonical_channel_ids,
             }
 
-            # Invoke the agent graph
-            result = await graph.ainvoke(initial_state)
+            max_iterations = _bounded_int_setting(
+                getattr(settings, "agent_max_iterations", DEFAULT_AGENT_MAX_ITERATIONS),
+                default=DEFAULT_AGENT_MAX_ITERATIONS,
+                minimum=MIN_AGENT_MAX_ITERATIONS,
+                maximum=MAX_AGENT_MAX_ITERATIONS,
+            )
+            agent_timeout_seconds = _bounded_float_setting(
+                getattr(
+                    settings,
+                    "agent_timeout_seconds",
+                    DEFAULT_AGENT_TIMEOUT_SECONDS,
+                ),
+                default=DEFAULT_AGENT_TIMEOUT_SECONDS,
+                minimum=MIN_AGENT_TIMEOUT_SECONDS,
+                maximum=MAX_AGENT_TIMEOUT_SECONDS,
+            )
+            recursion_limit = _recursion_limit_for_iterations(max_iterations)
+
+            # Invoke the agent graph with hard runtime and iteration bounds.
+            try:
+                result = await asyncio.wait_for(
+                    graph.ainvoke(
+                        initial_state,
+                        config={"recursion_limit": recursion_limit},
+                    ),
+                    timeout=agent_timeout_seconds,
+                )
+            except TimeoutError:
+                logger.warning(
+                    "Agent request for user %s timed out after %.1fs",
+                    user_slack_id,
+                    agent_timeout_seconds,
+                )
+                return AgentResponse(
+                    content=(
+                        "I couldn't finish that request within the runtime "
+                        "limit. Try a narrower time window or channel."
+                    ),
+                    error="Agent timeout",
+                )
 
             # Extract the final response
             response_content = self._extract_response(result)
