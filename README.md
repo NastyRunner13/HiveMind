@@ -220,8 +220,8 @@ HiveMind/
 │   │   ├── config.py         # Pydantic settings with startup validation
 │   │   ├── database.py       # Async SQLAlchemy engine + session factory
 │   │   └── main.py           # FastAPI app with full lifespan management
-│   ├── alembic/              # Database migrations (0001–0004)
-│   ├── tests/                # Test suite (209+ tests, per-integration subpackages)
+│   ├── alembic/              # Database migrations (0001–0005)
+│   ├── tests/                # Test suite (226 tests, per-integration subpackages)
 │   │   ├── agent/            # Agent, tool security, audit logging tests
 │   │   ├── events/           # Event bus + consumer tests
 │   │   ├── services/         # Service-layer tests (digest, knowledge, etc.)
@@ -261,7 +261,7 @@ HiveMind/
 ### Running Tests
 
 ```bash
-# Run ALL unit tests (209+ tests, no credentials needed)
+# Run ALL unit tests (226 tests, no credentials needed)
 python -m pytest tests/ -v --ignore=tests/slack/test_live.py
 
 # Run by test suite
@@ -318,7 +318,7 @@ alembic downgrade -1
 - [x] Embedding service with local sentence-transformers (384 dims)
 - [x] Semantic indexing consumer (Redis Streams → pgvector)
 
-#### Milestone 3 — Security & Indexing ✅ *(174 tests passing)*
+#### Milestone 3 — Security & Indexing ✅
 - [x] Server-derived ACL context (no client-supplied authority)
 - [x] ACL-scoped agent tools with closure-injected user context
 - [x] Channel membership model + denormalized O(1) ACL lookups
@@ -330,7 +330,21 @@ alembic downgrade -1
 - [x] Idempotent semantic indexing with re-index support
 - [x] Comprehensive test suites: agent security, audit, consumers, services
 
-#### Milestone 4 — Phase 1 Remaining *(Upcoming)*
+#### Milestone 4 — Secure Multi-Platform Foundation ✅
+- [x] OIDC REST authentication & JWT bearer validation
+- [x] Canonical identity model and workspace mapping (Alembic migration 0004)
+- [x] Base connector boundary & Slack platform connector adapter
+- [x] Normalized platform-neutral event schema contracts
+
+#### Milestone 5 — RAG Agent Production Hardening ✅ *(226 tests passing)*
+- [x] Workspace & time-scoped RAG retrieval (since/until filters)
+- [x] Deterministic activity summary tool (broad summaries via direct DB scans)
+- [x] Source attribution & citation metadata (Alembic migration 0005)
+- [x] Hardened runtime controls (agent timeout, recursion bounds, and prompt injection defense)
+- [x] Message deletion handling (chunk purging)
+- [x] Channel ACL revalidation (membership & type updates)
+
+#### Milestone 6 — Phase 1 Remaining *(Upcoming)*
 - [x] OIDC client bearer authentication & canonical identity mapping
 - [ ] RBAC with OBO token exchange for external sources (Graph)
 - [ ] Task management integration (Planner/Jira)
