@@ -29,24 +29,31 @@ skip_without_asyncpg = pytest.mark.skipif(
 
 
 @pytest.fixture
+def workspace_id():
+    """Workspace UUID that scopes all tool calls."""
+    return uuid.uuid4()
+
+
+@pytest.fixture
 def user_channel_ids():
     """Channel IDs the test user is a member of."""
     return ["C_PUBLIC_1", "C_PUBLIC_2", "C_PRIVATE_1"]
 
 
 @pytest.fixture
-def tools(user_channel_ids):
+def tools(user_channel_ids, workspace_id):
     """Create tools scoped to our test user."""
     from app.agent.tools import create_tools
 
     return create_tools(
         user_slack_id="U_TEST_USER",
         user_channel_ids=user_channel_ids,
+        workspace_id=workspace_id,
     )
 
 
 @pytest.fixture
-def tools_with_canonical(user_channel_ids):
+def tools_with_canonical(user_channel_ids, workspace_id):
     """Create tools scoped to our test user with canonical UUIDs."""
     import uuid as uuid_mod
 
@@ -55,6 +62,7 @@ def tools_with_canonical(user_channel_ids):
     return create_tools(
         user_slack_id="U_TEST_USER",
         user_channel_ids=user_channel_ids,
+        workspace_id=workspace_id,
         canonical_user_id=uuid_mod.uuid4(),
         canonical_channel_ids=[uuid_mod.uuid4(), uuid_mod.uuid4()],
     )
@@ -72,9 +80,9 @@ def get_tool_by_name(tools, name):
 class TestToolCreation:
     """Tests for the tool factory itself."""
 
-    def test_creates_five_tools(self, tools):
-        """create_tools should return exactly 5 tools."""
-        assert len(tools) == 5
+    def test_creates_six_tools(self, tools):
+        """create_tools should return the expected tool set."""
+        assert len(tools) == 6
 
     def test_tool_names(self, tools):
         """Verify all expected tools are created."""
@@ -85,12 +93,13 @@ class TestToolCreation:
             "list_channels",
             "get_channel_activity_summary",
             "generate_digest",
+            "summarize_activity",
         }
 
     def test_tools_do_not_expose_acl_params(self, tools):
         """Tools should NOT have user_channel_ids or user_slack_id as arguments."""
         for t in tools:
-            args = t.args_schema.schema() if t.args_schema else {}
+            args = t.args_schema.model_json_schema() if t.args_schema else {}
             properties = args.get("properties", {})
             assert "user_slack_id" not in properties, (
                 f"Tool '{t.name}' exposes user_slack_id as an LLM argument"
@@ -111,7 +120,7 @@ class TestToolCreation:
     def test_tools_with_canonical_do_not_expose_acl_params(self, tools_with_canonical):
         """Tools created with canonical UUIDs should also NOT expose ACL params."""
         for t in tools_with_canonical:
-            args = t.args_schema.schema() if t.args_schema else {}
+            args = t.args_schema.model_json_schema() if t.args_schema else {}
             properties = args.get("properties", {})
             assert "canonical_user_id" not in properties, (
                 f"Tool '{t.name}' exposes canonical_user_id as an LLM argument"
@@ -126,7 +135,7 @@ class TestSearchKnowledgeSecurity:
     """Tests that search_knowledge uses closed-over ACL context."""
 
     @pytest.mark.asyncio
-    async def test_passes_user_context_to_service(self, tools):
+    async def test_passes_user_context_to_service(self, tools, workspace_id):
         """search_knowledge should pass the closed-over user context."""
         search = get_tool_by_name(tools, "search_knowledge")
 
@@ -144,6 +153,47 @@ class TestSearchKnowledgeSecurity:
                 "C_PUBLIC_2",
                 "C_PRIVATE_1",
             ]
+            assert call_kwargs.kwargs["workspace_id"] == workspace_id
+
+    @pytest.mark.asyncio
+    async def test_search_accepts_bounded_time_window(self, tools, workspace_id):
+        """search_knowledge should pass explicit time filters to the service."""
+        search = get_tool_by_name(tools, "search_knowledge")
+
+        with patch("app.agent.tools.knowledge_service") as mock_ks:
+            mock_ks.search = AsyncMock(return_value=[])
+
+            await search.ainvoke({"query": "test query", "hours": 168, "top_k": 10})
+
+            call_kwargs = mock_ks.search.call_args.kwargs
+            assert call_kwargs["workspace_id"] == workspace_id
+            assert call_kwargs["since"] is not None
+            assert call_kwargs["until"] is not None
+            assert call_kwargs["top_k"] == 10
+
+    @pytest.mark.asyncio
+    async def test_rejects_oversized_search_window(self, tools):
+        """Tool schemas should reject LLM-supplied values outside bounds."""
+        search = get_tool_by_name(tools, "search_knowledge")
+
+        with pytest.raises(Exception):
+            await search.ainvoke({"query": "test query", "hours": 999})
+
+    @pytest.mark.asyncio
+    async def test_search_tool_times_out(self, tools):
+        """Tool execution should return safely when a backend call hangs."""
+        search = get_tool_by_name(tools, "search_knowledge")
+
+        with (
+            patch("app.agent.tools.knowledge_service") as mock_ks,
+            patch("app.agent.tools.get_settings") as mock_get_settings,
+        ):
+            mock_ks.search = AsyncMock(side_effect=TimeoutError)
+            mock_get_settings.return_value.agent_tool_timeout_seconds = 1
+
+            response = await search.ainvoke({"query": "test query"})
+
+            assert "timed out" in response
 
 
 @skip_without_asyncpg
@@ -228,17 +278,14 @@ class TestGenerateDigestSecurity:
             private_ch.slack_channel_id = "C_SECRET"
             private_ch.channel_type = ChannelType.PRIVATE
 
-            # First execute returns workspace, second returns channel
-            ws_result = MagicMock()
             ws = MagicMock()
             ws.id = uuid.uuid4()
-            ws_result.scalar_one_or_none.return_value = ws
 
             ch_result = MagicMock()
             ch_result.scalar_one_or_none.return_value = private_ch
 
-            mock_session.execute = AsyncMock(side_effect=[ws_result, ch_result])
-            mock_session.get = AsyncMock(return_value=None)
+            mock_session.execute = AsyncMock(return_value=ch_result)
+            mock_session.get = AsyncMock(return_value=ws)
 
             response = await digest.ainvoke({"channel_name": "secret-channel"})
 

@@ -73,15 +73,16 @@ class TestHandleMessage:
         mock_ingest.assert_called_once_with(sample_message_event)
 
     @pytest.mark.asyncio
-    async def test_message_skips_deleted(self, sample_deleted_message_event):
-        """message_deleted subtype should be skipped (not ingested)."""
+    async def test_message_deletion_has_delete_subtype(
+        self, sample_deleted_message_event
+    ):
+        """message_deleted subtype is routed to tombstone handling, not ingestion."""
         event = sample_deleted_message_event
         subtype = event.get("subtype")
-        skip_subtypes = {"message_deleted", "channel_join", "channel_leave"}
+        skip_subtypes = {"channel_join", "channel_leave"}
 
-        assert subtype in skip_subtypes, (
-            f"Expected subtype '{subtype}' to be in skip list"
-        )
+        assert subtype == "message_deleted"
+        assert subtype not in skip_subtypes
 
     @pytest.mark.asyncio
     async def test_message_skips_channel_join(self, sample_channel_join_event):

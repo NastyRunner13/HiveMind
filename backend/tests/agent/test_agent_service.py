@@ -10,6 +10,7 @@ Tests cover:
 - Mention cleaning
 """
 
+import uuid
 from unittest.mock import AsyncMock, patch
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
@@ -69,10 +70,44 @@ class TestAgentService:
                 user_slack_id="U123",
                 message="What happened today?",
                 channel_id="C456",
+                workspace_id=uuid.uuid4(),
             )
 
             assert response.content == "Here's your answer!"
             assert response.error is None
+            assert mock_graph.ainvoke.call_args.kwargs["config"] == {
+                "recursion_limit": 8
+            }
+
+    async def test_process_message_times_out(self):
+        """Returns a bounded error when the graph exceeds runtime limits."""
+        mock_graph = AsyncMock()
+        mock_graph.ainvoke = AsyncMock(side_effect=TimeoutError)
+
+        with (
+            patch("app.services.agent_service.settings") as mock_settings,
+            patch("app.agent.graph.build_agent_graph", return_value=mock_graph),
+            patch("app.services.agent_service.event_bus") as mock_bus,
+        ):
+            mock_settings.llm_configured = True
+            mock_settings.llm_provider = "openrouter"
+            mock_settings.llm_model = "test-model"
+            mock_settings.agent_max_iterations = 3
+            mock_settings.agent_timeout_seconds = 1
+            mock_bus.publish = AsyncMock()
+
+            from app.services.agent_service import AgentService
+
+            service = AgentService()
+            response = await service.process_message(
+                user_slack_id="U123",
+                message="What happened today?",
+                channel_id="C456",
+                workspace_id=uuid.uuid4(),
+            )
+
+            assert "runtime limit" in response.content
+            assert response.error == "Agent timeout"
 
     async def test_process_message_handles_exception(self):
         """Returns error message when agent raises an exception."""
@@ -90,6 +125,7 @@ class TestAgentService:
             response = await service.process_message(
                 user_slack_id="U123",
                 message="Break things",
+                workspace_id=uuid.uuid4(),
             )
 
             assert "Sorry" in response.content

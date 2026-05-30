@@ -219,6 +219,42 @@ class TestGeneratePersonalizedDigest:
             assert "Public channel summary" in result
             assert "Private channel summary" in result
 
+    @pytest.mark.asyncio
+    async def test_passes_requested_hours_to_channel_summaries(self):
+        """Past-week personalized digest should use the requested time window."""
+        from app.services.digest_service import DigestService
+
+        service = DigestService()
+
+        with (
+            patch("app.services.membership_service.membership_service") as mock_ms,
+            patch("app.services.digest_service.AsyncSessionLocal") as mock_factory,
+        ):
+            mock_ms.get_user_channel_ids = AsyncMock(return_value=["C_PUB_1"])
+
+            mock_session = AsyncMock()
+            mock_factory.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+            mock_factory.return_value.__aexit__ = AsyncMock(return_value=None)
+
+            ws = _make_workspace()
+            ch = _make_channel("general", "C_PUB_1", "public")
+            ws_result = MagicMock()
+            ws_result.scalar_one_or_none.return_value = ws
+            ch_result = MagicMock()
+            ch_result.scalars.return_value.all.return_value = [ch]
+            mock_session.execute = AsyncMock(side_effect=[ws_result, ch_result])
+
+            with patch.object(
+                service,
+                "_generate_channel_summary_only",
+                new_callable=AsyncMock,
+                return_value="General summary",
+            ) as mock_summary:
+                await service.generate_personalized_digest("U_TEST", hours=168)
+
+        mock_summary.assert_called_once()
+        assert mock_summary.call_args.kwargs["hours"] == 168
+
 
 @skip_without_asyncpg
 class TestGeneratePersonalizedDigestCanonical:
