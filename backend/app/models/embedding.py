@@ -156,6 +156,23 @@ class DocumentChunk(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         UUID(as_uuid=True), nullable=True, index=True
     )
 
+    # Source-system metadata used for time-scoped retrieval and citations.
+    # These are source timestamps/ids, not chunk indexing metadata.
+    source_created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    source_updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    source_author_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True, index=True
+    )
+    source_author_external_id: Mapped[str | None] = mapped_column(
+        String(255), nullable=True
+    )
+    source_thread_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    source_permalink: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+
     confidentiality: Mapped[Confidentiality] = mapped_column(
         Enum(
             Confidentiality,
