@@ -22,6 +22,8 @@ from sqlalchemy import and_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.database import AsyncSessionLocal
+from app.events.bus import EventType, event_bus
+from app.events.contracts import normalized_payload
 from app.models.channel import Channel
 from app.models.identity import Platform, UserPlatformMapping
 from app.models.membership import ChannelMembership
@@ -29,6 +31,40 @@ from app.models.user import SlackUser
 from app.models.workspace import Workspace
 
 logger = logging.getLogger(__name__)
+
+
+async def _publish_membership_updated(
+    *,
+    workspace_id: uuid.UUID,
+    channel_id: uuid.UUID,
+    slack_channel_id: str,
+    slack_user_id: str | None = None,
+    user_id: uuid.UUID | None = None,
+    is_active: bool | None = None,
+    source: str,
+    stats: dict | None = None,
+) -> None:
+    """Notify consumers that channel ACLs should be revalidated."""
+    metadata = {
+        "channel_id": slack_channel_id,
+        "user_id": slack_user_id,
+        "is_active": is_active,
+        "source": source,
+    }
+    if stats:
+        metadata["stats"] = stats
+
+    await event_bus.publish(
+        EventType.MEMBERSHIP_UPDATED,
+        normalized_payload(
+            platform=Platform.SLACK,
+            workspace_id=workspace_id,
+            workspace_integration_id=None,
+            channel_id=channel_id,
+            user_id=user_id,
+            external_metadata=metadata,
+        ),
+    )
 
 
 class MembershipService:
@@ -161,6 +197,16 @@ class MembershipService:
             await session.execute(stmt)
             await session.commit()
 
+            await _publish_membership_updated(
+                workspace_id=workspace.id,
+                channel_id=channel_id,
+                slack_channel_id=slack_channel_id,
+                slack_user_id=slack_user_id,
+                user_id=canonical_user_id or user_id,
+                is_active=True,
+                source="member_joined_channel",
+            )
+
             logger.info(
                 f"Membership recorded: {slack_user_id} joined {slack_channel_id}"
             )
@@ -181,7 +227,7 @@ class MembershipService:
             slack_channel_id: Slack channel ID they left.
         """
         async with AsyncSessionLocal() as session:
-            await session.execute(
+            result = await session.execute(
                 update(ChannelMembership)
                 .where(
                     and_(
@@ -191,8 +237,26 @@ class MembershipService:
                     )
                 )
                 .values(is_active=False)
+                .returning(
+                    ChannelMembership.workspace_id,
+                    ChannelMembership.channel_id,
+                    ChannelMembership.canonical_user_id,
+                    ChannelMembership.user_id,
+                )
             )
+            row = result.one_or_none()
             await session.commit()
+
+            if row is not None:
+                await _publish_membership_updated(
+                    workspace_id=row[0],
+                    channel_id=row[1],
+                    slack_channel_id=slack_channel_id,
+                    slack_user_id=slack_user_id,
+                    user_id=row[2] or row[3],
+                    is_active=False,
+                    source="member_left_channel",
+                )
 
             logger.info(
                 f"Membership deactivated: {slack_user_id} left {slack_channel_id}"
@@ -285,7 +349,7 @@ class MembershipService:
 
             # Deactivate members no longer in the channel
             if member_slack_ids:
-                await session.execute(
+                deactivated_result = await session.execute(
                     update(ChannelMembership)
                     .where(
                         and_(
@@ -297,8 +361,21 @@ class MembershipService:
                     )
                     .values(is_active=False)
                 )
+                deactivated = deactivated_result.rowcount or 0
+                stats["deactivated"] = (
+                    deactivated if isinstance(deactivated, int) else 0
+                )
 
             await session.commit()
+
+        await _publish_membership_updated(
+            workspace_id=workspace_id,
+            channel_id=channel_id,
+            slack_channel_id=slack_channel_id,
+            is_active=None,
+            source="bulk_membership_sync",
+            stats=stats,
+        )
 
         return stats
 

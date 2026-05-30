@@ -3,7 +3,7 @@
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -55,7 +55,8 @@ async def generate_digest(
         digests = [digest] if digest else []
     else:
         digests = await digest_service.generate_daily_digest(
-            workspace_id=principal.workspace_id
+            workspace_id=principal.workspace_id,
+            hours=request.hours,
         )
     return DigestListResponse(
         digests=[_response(digest) for digest in digests], total=len(digests)
@@ -79,7 +80,10 @@ async def list_digests(
             or_(
                 Digest.channel_id.is_(None),
                 Channel.channel_type == ChannelType.PUBLIC,
-                Digest.channel_id.in_(member_ids),
+                and_(
+                    Digest.channel_id.in_(member_ids),
+                    Channel.channel_type.notin_([ChannelType.DM, ChannelType.GROUP_DM]),
+                ),
             ),
         )
         .order_by(Digest.created_at.desc())

@@ -173,7 +173,9 @@ class TestHandleMemberLeft:
             mock_session = AsyncMock()
             mock_factory.return_value.__aenter__ = AsyncMock(return_value=mock_session)
             mock_factory.return_value.__aexit__ = AsyncMock(return_value=None)
-            mock_session.execute = AsyncMock()
+            update_result = MagicMock()
+            update_result.one_or_none.return_value = None
+            mock_session.execute = AsyncMock(return_value=update_result)
             mock_session.commit = AsyncMock()
 
             await membership_service.handle_member_left(
@@ -184,6 +186,40 @@ class TestHandleMemberLeft:
             # Should have issued an update and committed
             mock_session.execute.assert_called_once()
             mock_session.commit.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_member_left_publishes_revalidation_event(
+        self, membership_service, workspace_id, channel_id, user_id
+    ):
+        """Membership changes should trigger channel ACL revalidation."""
+        with (
+            patch("app.services.membership_service.AsyncSessionLocal") as mock_factory,
+            patch("app.services.membership_service.event_bus") as mock_bus,
+        ):
+            mock_session = AsyncMock()
+            mock_factory.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+            mock_factory.return_value.__aexit__ = AsyncMock(return_value=None)
+            update_result = MagicMock()
+            update_result.one_or_none.return_value = (
+                workspace_id,
+                channel_id,
+                user_id,
+                user_id,
+            )
+            mock_session.execute = AsyncMock(return_value=update_result)
+            mock_session.commit = AsyncMock()
+            mock_bus.publish = AsyncMock()
+
+            await membership_service.handle_member_left(
+                slack_user_id="U12345",
+                slack_channel_id="C67890",
+            )
+
+            mock_bus.publish.assert_awaited_once()
+            event_type = mock_bus.publish.call_args.args[0]
+            payload = mock_bus.publish.call_args.args[1]
+            assert event_type.value == "membership.updated"
+            assert payload["channel_id"] == str(channel_id)
 
 
 @skip_without_asyncpg

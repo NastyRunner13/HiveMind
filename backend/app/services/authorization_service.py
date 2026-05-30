@@ -46,6 +46,12 @@ async def require_channel_access(
             status_code=status.HTTP_404_NOT_FOUND, detail="Channel not found"
         )
 
+    if channel.channel_type in (ChannelType.DM, ChannelType.GROUP_DM):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="DM and group DM access is not enabled",
+        )
+
     if channel.channel_type == ChannelType.PUBLIC:
         return channel
 
@@ -64,5 +70,6 @@ async def accessible_channel_condition(
     member_ids = await get_member_channel_ids(session, principal)
     return and_(
         Channel.workspace_id == principal.workspace_id,
+        Channel.channel_type.notin_([ChannelType.DM, ChannelType.GROUP_DM]),
         or_(Channel.channel_type == ChannelType.PUBLIC, Channel.id.in_(member_ids)),
     )

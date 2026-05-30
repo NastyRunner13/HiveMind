@@ -12,6 +12,9 @@ preventing private/DM content from being indexed with public
 ACL metadata.
 """
 
+import uuid
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
 
 # Check if asyncpg is available
@@ -88,3 +91,54 @@ class TestInferChannelType:
                 f"— this is a data leak risk. Only verified Slack API "
                 f"data should set PUBLIC."
             )
+
+    @pytest.mark.asyncio
+    async def test_upsert_channel_type_change_publishes_revalidation(self):
+        """Verified channel type changes should trigger ACL revalidation."""
+        from app.events.bus import EventType
+        from app.models.channel import ChannelType
+        from app.services.ingestion import _upsert_channel
+
+        workspace_id = uuid.uuid4()
+        channel_id = uuid.uuid4()
+        integration_id = uuid.uuid4()
+
+        integration_result = MagicMock()
+        integration_result.scalar_one_or_none.return_value = integration_id
+        existing_result = MagicMock()
+        existing_result.one_or_none.return_value = (
+            channel_id,
+            ChannelType.PRIVATE,
+        )
+
+        session = AsyncMock()
+        session.execute = AsyncMock(
+            side_effect=[integration_result, existing_result, MagicMock()]
+        )
+        session.commit = AsyncMock()
+
+        with patch("app.services.ingestion.event_bus") as mock_bus:
+            mock_bus.publish = AsyncMock()
+
+            is_new = await _upsert_channel(
+                session,
+                {
+                    "id": "C123",
+                    "name": "general",
+                    "is_private": False,
+                    "topic": {"value": ""},
+                    "purpose": {"value": ""},
+                    "is_archived": False,
+                    "num_members": 10,
+                },
+                workspace_id,
+            )
+
+        assert is_new is False
+        mock_bus.publish.assert_awaited_once()
+        event_type = mock_bus.publish.call_args.args[0]
+        payload = mock_bus.publish.call_args.args[1]
+        assert event_type == EventType.CHANNEL_UPDATED
+        assert payload["channel_id"] == str(channel_id)
+        assert payload["external_metadata"]["old_channel_type"] == "private"
+        assert payload["external_metadata"]["new_channel_type"] == "public"

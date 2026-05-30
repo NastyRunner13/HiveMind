@@ -171,7 +171,10 @@ class TestEventTypes:
         expected = [
             "MESSAGE_INGESTED",
             "MESSAGE_EDITED",
+            "MESSAGE_DELETED",
             "FILE_SHARED",
+            "CHANNEL_UPDATED",
+            "MEMBERSHIP_UPDATED",
             "AGENT_QUERY",
             "AGENT_RESPONSE",
             "DIGEST_GENERATED",

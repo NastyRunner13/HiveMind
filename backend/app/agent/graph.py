@@ -45,6 +45,7 @@ class AgentState(TypedDict):
     # User context for ACL filtering
     user_slack_id: str
     user_channel_ids: list[str]
+    workspace_id: uuid.UUID
 
     # Canonical identity (set when caller is OIDC-authenticated)
     canonical_user_id: uuid.UUID | None
@@ -64,7 +65,7 @@ def _create_agent_node(tools: list):
         tools: List of LangChain tools scoped to the user's permissions.
     """
 
-    def agent_node(state: AgentState) -> dict[str, Any]:
+    async def agent_node(state: AgentState) -> dict[str, Any]:
         """
         The main agent node — calls the LLM with tools.
 
@@ -80,7 +81,7 @@ def _create_agent_node(tools: list):
         if not messages or not isinstance(messages[0], SystemMessage):
             messages = [SystemMessage(content=SYSTEM_PROMPT)] + list(messages)
 
-        response = llm_with_tools.invoke(messages)
+        response = await llm_with_tools.ainvoke(messages)
         return {"messages": [response]}
 
     return agent_node
@@ -109,6 +110,7 @@ def should_continue(state: AgentState) -> str:
 def build_agent_graph(
     user_slack_id: str,
     user_channel_ids: list[str],
+    workspace_id: uuid.UUID,
     canonical_user_id: uuid.UUID | None = None,
     canonical_channel_ids: list[uuid.UUID] | None = None,
 ) -> StateGraph:
@@ -128,6 +130,7 @@ def build_agent_graph(
     Args:
         user_slack_id: The authenticated user's Slack ID.
         user_channel_ids: Slack channel IDs the user has access to.
+        workspace_id: Internal workspace UUID used to scope every retrieval.
         canonical_user_id: Internal user UUID (OIDC path).
         canonical_channel_ids: Internal channel UUIDs the user has access to.
 
@@ -140,6 +143,7 @@ def build_agent_graph(
     tools = create_tools(
         user_slack_id=user_slack_id,
         user_channel_ids=user_channel_ids,
+        workspace_id=workspace_id,
         canonical_user_id=canonical_user_id,
         canonical_channel_ids=canonical_channel_ids,
     )

@@ -85,6 +85,38 @@ async def _load_message_context(
     return channel, message_result.scalar_one_or_none()
 
 
+def _parse_uuid(value: object) -> uuid.UUID | None:
+    """Parse a UUID from event payload data."""
+    if not value:
+        return None
+    try:
+        return uuid.UUID(str(value))
+    except ValueError:
+        return None
+
+
+async def _resolve_channel_from_event_data(session, data: dict) -> Channel | None:
+    """Resolve a channel from normalized or legacy event payload fields."""
+    channel_id = _parse_uuid(data.get("channel_id"))
+    if channel_id:
+        return await session.get(Channel, channel_id)
+
+    external_metadata = data.get("external_metadata") or {}
+    slack_channel_id = data.get("slack_channel_id") or external_metadata.get(
+        "channel_id"
+    )
+    if not slack_channel_id:
+        return None
+
+    filters = [Channel.slack_channel_id == slack_channel_id]
+    workspace_id = _parse_uuid(data.get("workspace_id"))
+    if workspace_id:
+        filters.append(Channel.workspace_id == workspace_id)
+
+    result = await session.execute(select(Channel).where(*filters).limit(1))
+    return result.scalar_one_or_none()
+
+
 async def _process_message_ingested(event_data: dict) -> None:
     """
     Process a MESSAGE_INGESTED event by indexing the message
@@ -249,10 +281,99 @@ async def _process_message_edited(event_data: dict) -> None:
 # EVENT ROUTER
 # ═════════════════════════════════════════════════════════════════
 
+
+async def _process_message_deleted(event_data: dict) -> None:
+    """Process a MESSAGE_DELETED event by removing source chunks."""
+    from app.services.knowledge_service import knowledge_service
+
+    data = event_data.get("data", {})
+    if data.get("channel_id") and data.get("message_id"):
+        async with AsyncSessionLocal() as session:
+            _channel, message = await _load_message_context(session, data)
+        if not message:
+            return
+        await knowledge_service.delete_chunks_for_source(message.id)
+        return
+
+    external_metadata = data.get("external_metadata") or {}
+    slack_channel_id = data.get("slack_channel_id") or external_metadata.get(
+        "channel_id"
+    )
+    slack_message_ts = data.get("slack_message_ts") or external_metadata.get(
+        "message_ts"
+    )
+
+    if not slack_channel_id or not slack_message_ts:
+        return
+
+    async with AsyncSessionLocal() as session:
+        ch_result = await session.execute(
+            select(Channel).where(Channel.slack_channel_id == slack_channel_id)
+        )
+        channel = ch_result.scalar_one_or_none()
+        if not channel:
+            return
+
+        msg_result = await session.execute(
+            select(Message).where(
+                Message.channel_id == channel.id,
+                Message.slack_message_ts == slack_message_ts,
+            )
+        )
+        message = msg_result.scalar_one_or_none()
+        if not message:
+            return
+
+    await knowledge_service.delete_chunks_for_source(message.id)
+
+
+async def _process_channel_updated(event_data: dict) -> None:
+    """Process a CHANNEL_UPDATED event by revalidating chunk ACL metadata."""
+    from app.services.knowledge_service import knowledge_service
+
+    data = event_data.get("data", {})
+    async with AsyncSessionLocal() as session:
+        channel = await _resolve_channel_from_event_data(session, data)
+        if channel:
+            channel_id = channel.id
+            workspace_id = channel.workspace_id
+    if not channel:
+        logger.warning("CHANNEL_UPDATED event references unknown channel: %s", data)
+        return
+
+    await knowledge_service.revalidate_channel_acl(
+        channel_id,
+        workspace_id=workspace_id,
+    )
+
+
+async def _process_membership_updated(event_data: dict) -> None:
+    """Process a MEMBERSHIP_UPDATED event by refreshing channel ACL metadata."""
+    from app.services.knowledge_service import knowledge_service
+
+    data = event_data.get("data", {})
+    async with AsyncSessionLocal() as session:
+        channel = await _resolve_channel_from_event_data(session, data)
+        if channel:
+            channel_id = channel.id
+            workspace_id = channel.workspace_id
+    if not channel:
+        logger.warning("MEMBERSHIP_UPDATED event references unknown channel: %s", data)
+        return
+
+    await knowledge_service.revalidate_channel_acl(
+        channel_id,
+        workspace_id=workspace_id,
+    )
+
+
 # Map event types to their handler functions
 _EVENT_HANDLERS = {
     EventType.MESSAGE_INGESTED.value: _process_message_ingested,
     EventType.MESSAGE_EDITED.value: _process_message_edited,
+    EventType.MESSAGE_DELETED.value: _process_message_deleted,
+    EventType.CHANNEL_UPDATED.value: _process_channel_updated,
+    EventType.MEMBERSHIP_UPDATED.value: _process_membership_updated,
 }
 
 

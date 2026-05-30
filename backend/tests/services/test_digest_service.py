@@ -228,6 +228,43 @@ class TestDigestSafety:
             assert mock_session.execute.call_count == 2
 
     @pytest.mark.asyncio
+    async def test_daily_digest_honors_requested_hours(self):
+        """All-channel digest generation should pass the requested hours."""
+        import uuid
+
+        from app.services.digest_service import DigestService
+
+        service = DigestService()
+
+        with patch("app.services.digest_service.AsyncSessionLocal") as mock_factory:
+            mock_session = AsyncMock()
+            mock_factory.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+            mock_factory.return_value.__aexit__ = AsyncMock(return_value=None)
+
+            workspace = MagicMock()
+            workspace.id = uuid.uuid4()
+            channel = MagicMock()
+            channel.id = uuid.uuid4()
+            channel.name = "general"
+
+            ws_result = MagicMock()
+            ws_result.scalar_one_or_none.return_value = workspace
+            ch_result = MagicMock()
+            ch_result.scalars.return_value.all.return_value = [channel]
+            mock_session.execute = AsyncMock(side_effect=[ws_result, ch_result])
+
+            with patch.object(
+                service,
+                "generate_channel_digest",
+                new_callable=AsyncMock,
+                return_value=None,
+            ) as mock_generate:
+                await service.generate_daily_digest(hours=168)
+
+        mock_generate.assert_called_once()
+        assert mock_generate.call_args.kwargs["hours"] == 168
+
+    @pytest.mark.asyncio
     async def test_deliver_to_slack_posts_to_source_channel(self):
         """deliver_to_slack should post to the source channel, not global."""
         import uuid

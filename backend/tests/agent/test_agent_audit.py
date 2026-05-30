@@ -8,6 +8,7 @@ Verifies that:
 - Sensitive arguments are truncated in audit logs
 """
 
+import uuid
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -213,6 +214,7 @@ class TestAuditEventPublishing:
                 message="search for auth",
                 channel_id="C_TEST",
                 user_channel_ids=["C_TEST"],
+                workspace_id=uuid.uuid4(),
             )
 
             # Verify AGENT_TOOL_CALL event was published
@@ -261,6 +263,7 @@ class TestAuditEventPublishing:
                 message="hello",
                 channel_id="C_TEST",
                 user_channel_ids=["C_TEST"],
+                workspace_id=uuid.uuid4(),
             )
 
             # Should NOT have any AGENT_TOOL_CALL events
@@ -320,6 +323,7 @@ class TestAuditEventPublishing:
                 message="check backend",
                 channel_id="C_TEST",
                 user_channel_ids=["C_TEST"],
+                workspace_id=uuid.uuid4(),
             )
 
             # Find the AGENT_RESPONSE event

@@ -436,6 +436,155 @@ class TestProcessMessageEdited:
 
 
 @skip_without_asyncpg
+class TestProcessMessageDeleted:
+    """Tests for _process_message_deleted handler."""
+
+    @pytest.mark.asyncio
+    async def test_deletes_chunks_for_normalized_message_event(
+        self, sample_message, sample_channel
+    ):
+        """MESSAGE_DELETED should remove chunks for the deleted source."""
+        from app.events.consumers import _process_message_deleted
+
+        sample_message.channel_id = sample_channel.id
+        event_data = {
+            "type": "message.deleted",
+            "data": {
+                "schema_version": 1,
+                "platform": "slack",
+                "channel_id": str(sample_channel.id),
+                "message_id": str(sample_message.id),
+            },
+        }
+
+        with (
+            patch("app.events.consumers.AsyncSessionLocal") as mock_factory,
+            patch("app.services.knowledge_service.knowledge_service") as mock_ks,
+        ):
+            session = AsyncMock()
+            mock_factory.return_value.__aenter__ = AsyncMock(return_value=session)
+            mock_factory.return_value.__aexit__ = AsyncMock(return_value=None)
+            session.get = AsyncMock(side_effect=[sample_channel, sample_message])
+            mock_ks.delete_chunks_for_source = AsyncMock(return_value=2)
+
+            await _process_message_deleted(event_data)
+
+            mock_ks.delete_chunks_for_source.assert_called_once_with(sample_message.id)
+
+    @pytest.mark.asyncio
+    async def test_deleted_event_registered_for_ack(
+        self, sample_message, sample_channel
+    ):
+        """The event router should process and ack message.deleted events."""
+        from app.events.consumers import _process_event
+
+        sample_message.channel_id = sample_channel.id
+        event = {
+            "id": "1716382103-0",
+            "type": "message.deleted",
+            "stream": "hivemind-events",
+            "group": "knowledge-indexer",
+            "data": {
+                "channel_id": str(sample_channel.id),
+                "message_id": str(sample_message.id),
+            },
+        }
+
+        with (
+            patch("app.events.consumers.AsyncSessionLocal") as mock_factory,
+            patch("app.services.knowledge_service.knowledge_service") as mock_ks,
+            patch("app.events.consumers.event_bus") as mock_bus,
+        ):
+            session = AsyncMock()
+            mock_factory.return_value.__aenter__ = AsyncMock(return_value=session)
+            mock_factory.return_value.__aexit__ = AsyncMock(return_value=None)
+            session.get = AsyncMock(side_effect=[sample_channel, sample_message])
+            mock_ks.delete_chunks_for_source = AsyncMock(return_value=1)
+            mock_bus.ack = AsyncMock()
+
+            await _process_event(event)
+
+            mock_bus.ack.assert_called_once_with(
+                "hivemind-events", "knowledge-indexer", "1716382103-0"
+            )
+
+
+@skip_without_asyncpg
+class TestProcessACLRevalidationEvents:
+    """Tests for channel/membership ACL revalidation events."""
+
+    @pytest.mark.asyncio
+    async def test_channel_updated_revalidates_channel_acl(self, sample_channel):
+        """CHANNEL_UPDATED should refresh ACL metadata for channel chunks."""
+        from app.events.consumers import _process_channel_updated
+
+        sample_channel.workspace_id = uuid.uuid4()
+        event_data = {
+            "type": "channel.updated",
+            "data": {
+                "schema_version": 1,
+                "platform": "slack",
+                "workspace_id": str(sample_channel.workspace_id),
+                "channel_id": str(sample_channel.id),
+            },
+        }
+
+        with (
+            patch("app.events.consumers.AsyncSessionLocal") as mock_factory,
+            patch("app.services.knowledge_service.knowledge_service") as mock_ks,
+        ):
+            session = AsyncMock()
+            mock_factory.return_value.__aenter__ = AsyncMock(return_value=session)
+            mock_factory.return_value.__aexit__ = AsyncMock(return_value=None)
+            session.get = AsyncMock(return_value=sample_channel)
+            mock_ks.revalidate_channel_acl = AsyncMock(
+                return_value={"updated": 1, "deleted": 0}
+            )
+
+            await _process_channel_updated(event_data)
+
+            mock_ks.revalidate_channel_acl.assert_awaited_once_with(
+                sample_channel.id,
+                workspace_id=sample_channel.workspace_id,
+            )
+
+    @pytest.mark.asyncio
+    async def test_membership_updated_revalidates_channel_acl(self, sample_channel):
+        """MEMBERSHIP_UPDATED should refresh ACL verification metadata."""
+        from app.events.consumers import _process_membership_updated
+
+        sample_channel.workspace_id = uuid.uuid4()
+        event_data = {
+            "type": "membership.updated",
+            "data": {
+                "schema_version": 1,
+                "platform": "slack",
+                "workspace_id": str(sample_channel.workspace_id),
+                "channel_id": str(sample_channel.id),
+            },
+        }
+
+        with (
+            patch("app.events.consumers.AsyncSessionLocal") as mock_factory,
+            patch("app.services.knowledge_service.knowledge_service") as mock_ks,
+        ):
+            session = AsyncMock()
+            mock_factory.return_value.__aenter__ = AsyncMock(return_value=session)
+            mock_factory.return_value.__aexit__ = AsyncMock(return_value=None)
+            session.get = AsyncMock(return_value=sample_channel)
+            mock_ks.revalidate_channel_acl = AsyncMock(
+                return_value={"updated": 1, "deleted": 0}
+            )
+
+            await _process_membership_updated(event_data)
+
+            mock_ks.revalidate_channel_acl.assert_awaited_once_with(
+                sample_channel.id,
+                workspace_id=sample_channel.workspace_id,
+            )
+
+
+@skip_without_asyncpg
 class TestProcessEvent:
     """Tests for _process_event (ack-on-success semantics)."""
 

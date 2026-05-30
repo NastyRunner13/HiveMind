@@ -29,6 +29,7 @@ class TestAgentState:
         assert "messages" in annotations
         assert "user_slack_id" in annotations
         assert "user_channel_ids" in annotations
+        assert "workspace_id" in annotations
         assert "canonical_user_id" in annotations
         assert "canonical_channel_ids" in annotations
 
@@ -60,6 +61,7 @@ class TestShouldContinue:
             "messages": [HumanMessage(content="test"), ai_msg],
             "user_slack_id": "U123",
             "user_channel_ids": [],
+            "workspace_id": "204ab53a-a900-48ee-95de-3bf4dccdd89e",
             "canonical_user_id": None,
             "canonical_channel_ids": None,
         }
@@ -78,6 +80,7 @@ class TestShouldContinue:
             "messages": [HumanMessage(content="test"), ai_msg],
             "user_slack_id": "U123",
             "user_channel_ids": [],
+            "workspace_id": "204ab53a-a900-48ee-95de-3bf4dccdd89e",
             "canonical_user_id": None,
             "canonical_channel_ids": None,
         }
@@ -95,6 +98,7 @@ class TestShouldContinue:
             "messages": [HumanMessage(content="test")],
             "user_slack_id": "U123",
             "user_channel_ids": [],
+            "workspace_id": "204ab53a-a900-48ee-95de-3bf4dccdd89e",
             "canonical_user_id": None,
             "canonical_channel_ids": None,
         }
@@ -123,6 +127,7 @@ class TestGraphConstruction:
             graph = build_agent_graph(
                 user_slack_id="U_TEST",
                 user_channel_ids=["C_CHAN1"],
+                workspace_id="204ab53a-a900-48ee-95de-3bf4dccdd89e",
             )
             assert graph is not None
 
@@ -140,6 +145,7 @@ class TestGraphConstruction:
             graph = build_agent_graph(
                 user_slack_id="U_TEST",
                 user_channel_ids=["C_CHAN1"],
+                workspace_id=uuid_mod.uuid4(),
                 canonical_user_id=uuid_mod.uuid4(),
                 canonical_channel_ids=[uuid_mod.uuid4()],
             )
@@ -157,10 +163,12 @@ class TestGraphConstruction:
             graph1 = build_agent_graph(
                 user_slack_id="U_USER1",
                 user_channel_ids=["C_CHAN1"],
+                workspace_id="204ab53a-a900-48ee-95de-3bf4dccdd89e",
             )
             graph2 = build_agent_graph(
                 user_slack_id="U_USER2",
                 user_channel_ids=["C_CHAN2"],
+                workspace_id="204ab53a-a900-48ee-95de-3bf4dccdd89e",
             )
             # Per-request graphs are NOT the same instance
             assert graph1 is not graph2

@@ -30,6 +30,10 @@ async def search_knowledge(
         user_channel_uuids=user_channel_uuids,
         user_id=principal.user_id,
         workspace_id=principal.workspace_id,
+        since=request.since,
+        until=request.until,
+        source_types=request.source_types,
+        channel_ids=request.channel_ids,
         top_k=request.top_k,
     )
     return SearchResponse(
@@ -43,6 +47,15 @@ async def search_knowledge(
                 source_id=result.source_id,
                 source_channel_id=result.source_channel_id,
                 source_channel_uuid=result.source_channel_uuid,
+                source_channel_name=result.source_channel_name,
+                source_created_at=result.source_created_at,
+                source_updated_at=result.source_updated_at,
+                source_author_id=result.source_author_id,
+                source_author_external_id=result.source_author_external_id,
+                source_author_display_name=result.source_author_display_name,
+                source_thread_id=result.source_thread_id,
+                source_permalink=result.source_permalink,
+                retrieval_method=result.retrieval_method,
                 chunk_index=result.chunk_index,
             )
             for result in results

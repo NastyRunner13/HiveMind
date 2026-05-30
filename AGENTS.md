@@ -301,7 +301,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for full details. Quick reference:
 
 > **Detailed task tracking has been moved to the [`tasks/`](tasks/) directory.** This section is a compact summary for quick orientation.
 
-### What's Built (Milestones 1–4 Complete)
+### What's Built (Milestones 1–5 Complete)
 
 | Milestone | Summary | Test Count |
 |-----------|---------|------------|
@@ -309,7 +309,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for full details. Quick reference:
 | **M2: Core Intelligence** | Redis event bus + pgvector knowledge fabric + LangGraph agent + daily digest + APIs | — |
 | **M3: Security & Indexing** | Semantic indexing consumer + channel memberships + ACL-scoped agent tools + safe digests + embedding safety | 53 |
 | **M4: Multi-Platform Foundation** | OIDC auth + canonical identities + protected APIs + connector boundary + normalized events | — |
-| **Total non-live tests** | **209 passing** (May 28, 2026) | |
+| **M5: RAG Hardening** | Workspace propagation + source-time filters + bounded tool args + activity summary tool + deletion handling | — |
+| **Total non-live tests** | **226 passing** (May 28, 2026) | |
 
 For detailed component-by-component breakdown, see [`tasks/completed.md`](tasks/completed.md).
 

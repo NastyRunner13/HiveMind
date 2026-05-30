@@ -32,9 +32,11 @@ class EventType(str, enum.Enum):
     # Ingestion events
     MESSAGE_INGESTED = "message.ingested"
     MESSAGE_EDITED = "message.edited"
+    MESSAGE_DELETED = "message.deleted"
     FILE_SHARED = "file.shared"
     CHANNEL_CREATED = "channel.created"
     CHANNEL_UPDATED = "channel.updated"
+    MEMBERSHIP_UPDATED = "membership.updated"
     USER_JOINED = "user.joined"
 
     # Agent events (for workflow tracing)

@@ -396,6 +396,73 @@ async def handle_message_edit(event: dict) -> None:
         logger.debug(f"Updated edited message {slack_ts}")
 
 
+async def handle_message_delete(event: dict) -> None:
+    """
+    Handle a message_deleted event by tombstoning stored content.
+
+    The knowledge consumer receives MESSAGE_DELETED and removes any existing
+    vector chunks for the source message. The message row is retained without
+    content so future ingestion remains idempotent and digests skip it.
+    """
+    slack_ts = (
+        event.get("deleted_ts")
+        or (event.get("previous_message") or {}).get("ts")
+        or event.get("ts")
+    )
+    channel_id_str = event.get("channel")
+    if not slack_ts or not channel_id_str:
+        return
+
+    async with AsyncSessionLocal() as session:
+        workspace_id = await _get_workspace_id(session)
+        if not workspace_id:
+            return
+
+        channel_id = await _resolve_channel_id(session, channel_id_str, workspace_id)
+        if not channel_id:
+            return
+
+        integration_id = await _get_slack_integration_id(session, workspace_id)
+        updated = await session.execute(
+            update(Message)
+            .where(
+                Message.workspace_id == workspace_id,
+                Message.channel_id == channel_id,
+                Message.slack_message_ts == slack_ts,
+            )
+            .values(
+                content="",
+                message_type=MessageType.SYSTEM,
+                has_attachments=False,
+                has_files=False,
+            )
+            .returning(Message.id, Message.sender_id)
+        )
+        row = updated.one_or_none()
+        await session.commit()
+
+        message_id = row[0] if row else None
+        sender_id = row[1] if row else None
+
+        await event_bus.publish(
+            EventType.MESSAGE_DELETED,
+            normalized_payload(
+                platform=Platform.SLACK,
+                workspace_id=workspace_id,
+                workspace_integration_id=integration_id,
+                channel_id=channel_id,
+                message_id=message_id,
+                sender_id=sender_id,
+                external_metadata={
+                    "channel_id": channel_id_str,
+                    "message_ts": slack_ts,
+                },
+            ),
+        )
+
+        logger.debug(f"Tombstoned deleted message {slack_ts}")
+
+
 # ═════════════════════════════════════════════════════════════════
 # FILE METADATA INGESTION
 # ═════════════════════════════════════════════════════════════════
@@ -572,6 +639,7 @@ async def _upsert_channel(session, channel_data: dict, workspace_id) -> bool:
         constraint="uq_channel_workspace_slack_id",
         set_={
             "name": stmt.excluded.name,
+            "channel_type": stmt.excluded.channel_type,
             "topic": stmt.excluded.topic,
             "purpose": stmt.excluded.purpose,
             "is_archived": stmt.excluded.is_archived,
@@ -579,14 +647,17 @@ async def _upsert_channel(session, channel_data: dict, workspace_id) -> bool:
         },
     )
 
-    # Check if it existed before
+    # Check if it existed before and whether ACL-driving metadata changed.
     existing = await session.execute(
-        select(Channel.id).where(
+        select(Channel.id, Channel.channel_type).where(
             Channel.slack_channel_id == slack_id,
             Channel.workspace_id == workspace_id,
         )
     )
-    is_new = existing.scalar_one_or_none() is None
+    existing_row = existing.one_or_none()
+    existing_channel_id = existing_row[0] if existing_row is not None else None
+    previous_channel_type = existing_row[1] if existing_row is not None else None
+    is_new = existing_row is None
 
     await session.execute(stmt)
     await session.commit()
@@ -612,6 +683,25 @@ async def _upsert_channel(session, channel_data: dict, workspace_id) -> bool:
                 },
             ),
         )
+    elif previous_channel_type != ch_type:
+        await event_bus.publish(
+            EventType.CHANNEL_UPDATED,
+            normalized_payload(
+                platform=Platform.SLACK,
+                workspace_id=workspace_id,
+                workspace_integration_id=integration_id,
+                channel_id=existing_channel_id,
+                external_metadata={
+                    "channel_id": slack_id,
+                    "name": channel_data.get("name"),
+                    "old_channel_type": (
+                        previous_channel_type.value if previous_channel_type else None
+                    ),
+                    "new_channel_type": ch_type.value,
+                    "acl_revalidation_required": True,
+                },
+            ),
+        )
 
     return is_new
 
@@ -623,6 +713,21 @@ async def update_channel(slack_channel_id: str, updates: dict) -> None:
         if not workspace_id:
             return
 
+        if "channel_type" in updates and isinstance(updates["channel_type"], str):
+            updates = {**updates, "channel_type": ChannelType(updates["channel_type"])}
+
+        existing = await session.execute(
+            select(Channel.id, Channel.channel_type).where(
+                Channel.slack_channel_id == slack_channel_id,
+                Channel.workspace_id == workspace_id,
+            )
+        )
+        existing_row = existing.one_or_none()
+        if existing_row is None:
+            return
+
+        channel_id = existing_row[0]
+        previous_channel_type = existing_row[1]
         await session.execute(
             update(Channel)
             .where(
@@ -632,6 +737,25 @@ async def update_channel(slack_channel_id: str, updates: dict) -> None:
             .values(**updates)
         )
         await session.commit()
+
+        new_channel_type = updates.get("channel_type")
+        if new_channel_type and new_channel_type != previous_channel_type:
+            integration_id = await _get_slack_integration_id(session, workspace_id)
+            await event_bus.publish(
+                EventType.CHANNEL_UPDATED,
+                normalized_payload(
+                    platform=Platform.SLACK,
+                    workspace_id=workspace_id,
+                    workspace_integration_id=integration_id,
+                    channel_id=channel_id,
+                    external_metadata={
+                        "channel_id": slack_channel_id,
+                        "old_channel_type": previous_channel_type.value,
+                        "new_channel_type": new_channel_type.value,
+                        "acl_revalidation_required": True,
+                    },
+                ),
+            )
 
 
 # ═════════════════════════════════════════════════════════════════
