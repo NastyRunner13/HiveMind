@@ -1,402 +1,534 @@
 """
-Agent Tools — LangChain tool definitions wrapping HiveMind services.
+Agent tool definitions wrapping HiveMind services.
 
-These tools give the AI agent access to HiveMind's capabilities:
-- Semantic search across the Knowledge Fabric
-- Channel message retrieval
-- Channel listing
-- Channel activity summaries
-- On-demand digest generation
-
-SECURITY: Tools are created per-request via create_tools(), which
-bakes the user's trusted ACL context into closures. The LLM never
-sees or controls ACL parameters — they are injected from server-derived
-context (channel memberships looked up from the database).
+Tools are created per request with trusted ACL context closed over from the
+server. The LLM can choose tool inputs such as query text and time window, but
+it never receives user IDs, channel membership lists, or workspace scope.
 """
 
+import asyncio
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 
 from langchain_core.tools import tool
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import func, or_, select
 
+from app.config import get_settings
 from app.database import AsyncSessionLocal
 from app.models.channel import Channel, ChannelType
 from app.models.message import Message
+from app.models.workspace import Workspace
 from app.services.knowledge_service import knowledge_service
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_AGENT_TOOL_TIMEOUT_SECONDS = 20.0
+MIN_AGENT_TOOL_TIMEOUT_SECONDS = 1.0
+MAX_AGENT_TOOL_TIMEOUT_SECONDS = 60.0
 
-# ═════════════════════════════════════════════════════════════════
-# TOOL FACTORY — Creates tools with trusted user context baked in
-# ═════════════════════════════════════════════════════════════════
+
+def _tool_timeout_seconds() -> float:
+    """Return a bounded per-tool timeout from settings."""
+    value = getattr(
+        get_settings(),
+        "agent_tool_timeout_seconds",
+        DEFAULT_AGENT_TOOL_TIMEOUT_SECONDS,
+    )
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return DEFAULT_AGENT_TOOL_TIMEOUT_SECONDS
+    return max(
+        MIN_AGENT_TOOL_TIMEOUT_SECONDS,
+        min(float(value), MAX_AGENT_TOOL_TIMEOUT_SECONDS),
+    )
+
+
+async def _run_tool_with_timeout(coro, tool_name: str) -> str:
+    """Run an agent tool with a hard timeout and a safe user-facing response."""
+    timeout = _tool_timeout_seconds()
+    try:
+        return await asyncio.wait_for(coro, timeout=timeout)
+    except TimeoutError:
+        logger.warning("Agent tool %s timed out after %.1fs", tool_name, timeout)
+        return (
+            f"Tool '{tool_name}' timed out after {timeout:g} seconds. "
+            "Try a narrower request."
+        )
+
+
+class SearchKnowledgeArgs(BaseModel):
+    """Bounded semantic search arguments exposed to the LLM."""
+
+    query: str = Field(min_length=1, max_length=1000)
+    top_k: int = Field(default=5, ge=1, le=50)
+    hours: int | None = Field(default=None, ge=1, le=168)
+    since: datetime | None = None
+    until: datetime | None = None
+
+    @model_validator(mode="after")
+    def validate_window(self) -> "SearchKnowledgeArgs":
+        if self.since and self.until and self.until < self.since:
+            raise ValueError("until must be greater than or equal to since")
+        return self
+
+
+class RecentMessagesArgs(BaseModel):
+    """Bounded recent-message lookup arguments exposed to the LLM."""
+
+    channel_name: str = Field(default="", max_length=80)
+    hours: int = Field(default=24, ge=1, le=168)
+    limit: int = Field(default=20, ge=1, le=100)
+
+
+class ChannelActivityArgs(BaseModel):
+    """Bounded channel activity arguments exposed to the LLM."""
+
+    channel_name: str = Field(default="", max_length=80)
+    hours: int = Field(default=24, ge=1, le=168)
+
+
+class GenerateDigestArgs(BaseModel):
+    """Bounded digest arguments exposed to the LLM."""
+
+    channel_name: str = Field(default="", max_length=80)
+    hours: int = Field(default=24, ge=1, le=168)
+    personalized: bool = False
+
+
+class SummarizeActivityArgs(BaseModel):
+    """Deterministic time-window summary arguments exposed to the LLM."""
+
+    channel_name: str | None = Field(default=None, max_length=80)
+    hours: int = Field(default=24, ge=1, le=168)
+    topic: str | None = Field(default=None, max_length=300)
+    personalized: bool = True
+
+
+def _is_member_channel(
+    channel: Channel,
+    user_channel_ids: list[str],
+    canonical_channel_ids: list[uuid.UUID] | None,
+) -> bool:
+    """Return whether the server-derived membership context includes channel."""
+    ext_id = getattr(channel, "external_channel_id", None)
+    return (
+        channel.slack_channel_id in user_channel_ids
+        or (bool(ext_id) and ext_id in user_channel_ids)
+        or (
+            canonical_channel_ids is not None
+            and channel.id in set(canonical_channel_ids)
+        )
+    )
+
+
+def _can_read_channel(
+    channel: Channel,
+    user_channel_ids: list[str],
+    canonical_channel_ids: list[uuid.UUID] | None,
+) -> bool:
+    """Enforce channel read access for agent tools."""
+    if channel.channel_type == ChannelType.PUBLIC:
+        return True
+    return _is_member_channel(channel, user_channel_ids, canonical_channel_ids)
+
+
+def _safe_since_until(
+    hours: int | None = None,
+    since: datetime | None = None,
+    until: datetime | None = None,
+) -> tuple[datetime | None, datetime | None]:
+    """Normalize relative tool time windows into explicit UTC datetimes."""
+    resolved_until = until or (datetime.now(timezone.utc) if hours else None)
+    resolved_since = since
+    if hours and resolved_since is None:
+        resolved_since = (resolved_until or datetime.now(timezone.utc)) - timedelta(
+            hours=hours
+        )
+    return resolved_since, resolved_until
 
 
 def create_tools(
     user_slack_id: str,
     user_channel_ids: list[str],
+    workspace_id: uuid.UUID,
     canonical_user_id: uuid.UUID | None = None,
     canonical_channel_ids: list[uuid.UUID] | None = None,
 ) -> list:
     """
-    Create agent tools with trusted user context baked in via closures.
-
-    The LLM never sees or controls ACL parameters — they are injected
-    from server-derived context (channel memberships looked up from
-    the database by the membership_service).
-
-    Supports dual-path ACL:
-    - Slack IDs (``user_slack_id``, ``user_channel_ids``): used by the
-      Slack event handler path (``app_mention``).
-    - Canonical UUIDs (``canonical_user_id``, ``canonical_channel_ids``):
-      used by the REST API path (OIDC-authenticated requests).
+    Create agent tools with trusted user and workspace context baked in.
 
     Args:
-        user_slack_id: The authenticated user's Slack ID (server-derived).
-        user_channel_ids: Slack channel IDs the user is a member of (server-derived).
-        canonical_user_id: Internal user UUID, when the caller is authenticated via OIDC.
-        canonical_channel_ids: Internal channel UUIDs the user has access to.
+        user_slack_id: Authenticated Slack user ID.
+        user_channel_ids: Slack channel IDs the user belongs to.
+        workspace_id: Internal workspace UUID. Required for all retrieval.
+        canonical_user_id: Internal user UUID, when available.
+        canonical_channel_ids: Internal channel UUIDs the user can access.
 
     Returns:
-        List of LangChain tool instances scoped to this user's permissions.
+        LangChain tools scoped to this user and workspace.
     """
 
-    @tool
-    async def search_knowledge(query: str) -> str:
-        """Search the team's Knowledge Fabric for relevant information.
+    @tool(args_schema=SearchKnowledgeArgs)
+    async def search_knowledge(
+        query: str,
+        top_k: int = 5,
+        hours: int | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> str:
+        """Search workspace knowledge with ACL and optional source-time filters.
 
-        Use this when the user asks a question about past discussions, files,
-        decisions, or any team knowledge. Returns relevant text chunks with
-        source attribution.
-
-        Args:
-            query: The natural language search query.
+        Use this for topic-specific questions about past discussions or files.
+        For broad recaps such as "what did we discuss last week", use
+        summarize_activity instead because it scans the bounded message window.
         """
-        results = await knowledge_service.search(
-            query=query,
-            user_channel_ids=user_channel_ids,
-            user_slack_id=user_slack_id,
-            user_channel_uuids=canonical_channel_ids,
-            user_id=canonical_user_id,
-            top_k=5,
-        )
 
-        if not results:
-            return "No relevant information found in the Knowledge Fabric."
-
-        formatted = []
-        for i, r in enumerate(results, 1):
-            channel_info = (
-                f" (channel: {r.source_channel_id})" if r.source_channel_id else ""
-            )
-            formatted.append(
-                f"[{i}] (score: {r.score:.2f}, "
-                f"source: {r.source_type}{channel_info})\n"
-                f"{r.content}"
+        async def _run() -> str:
+            resolved_since, resolved_until = _safe_since_until(hours, since, until)
+            results = await knowledge_service.search(
+                query=query,
+                workspace_id=workspace_id,
+                user_channel_ids=user_channel_ids,
+                user_slack_id=user_slack_id,
+                user_channel_uuids=canonical_channel_ids,
+                user_id=canonical_user_id,
+                since=resolved_since,
+                until=resolved_until,
+                top_k=top_k,
             )
 
-        return "\n\n---\n\n".join(formatted)
+            if not results:
+                return "No relevant information found in the Knowledge Fabric."
 
-    @tool
+            formatted = []
+            for index, result in enumerate(results, 1):
+                channel = result.source_channel_name or result.source_channel_id
+                timestamp = (
+                    result.source_created_at.isoformat()
+                    if result.source_created_at
+                    else "unknown time"
+                )
+                author = (
+                    result.source_author_display_name
+                    or result.source_author_external_id
+                    or "unknown author"
+                )
+                permalink = (
+                    f"\nPermalink: {result.source_permalink}"
+                    if result.source_permalink
+                    else ""
+                )
+                formatted.append(
+                    "[{index}] score={score:.2f} source={source} "
+                    "channel={channel} time={timestamp} author={author}\n"
+                    "<UNTRUSTED_SOURCE_CONTENT>\n{content}\n"
+                    "</UNTRUSTED_SOURCE_CONTENT>{permalink}".format(
+                        index=index,
+                        score=result.score,
+                        source=result.source_type,
+                        channel=channel or "unknown",
+                        timestamp=timestamp,
+                        author=author,
+                        content=result.content,
+                        permalink=permalink,
+                    )
+                )
+
+            return "\n\n---\n\n".join(formatted)
+
+        return await _run_tool_with_timeout(_run(), "search_knowledge")
+
+    @tool(args_schema=RecentMessagesArgs)
     async def get_recent_messages(
         channel_name: str = "",
         hours: int = 24,
         limit: int = 20,
     ) -> str:
-        """Get recent messages from a specific channel.
+        """Get recent messages from a specific accessible channel."""
 
-        Use this when the user asks about recent activity in a channel,
-        or wants to know what happened today/recently.
+        async def _run() -> str:
+            normalized_name = channel_name.lstrip("#") if channel_name else ""
+            async with AsyncSessionLocal() as session:
+                since = datetime.now(timezone.utc) - timedelta(hours=hours)
 
-        Args:
-            channel_name: Name of the Slack channel (without #).
-            hours: How many hours back to look (default: 24).
-            limit: Maximum number of messages to return (default: 20).
-        """
-        async with AsyncSessionLocal() as session:
-            since = datetime.now(timezone.utc) - timedelta(hours=hours)
+                result = await session.execute(
+                    select(Channel).where(
+                        Channel.workspace_id == workspace_id,
+                        Channel.name.ilike(f"%{normalized_name}%"),
+                    )
+                )
+                channel = result.scalar_one_or_none()
+                if not channel:
+                    return f"Channel '{channel_name}' not found."
 
-            # Find the channel
-            query = select(Channel).where(Channel.name.ilike(f"%{channel_name}%"))
-            result = await session.execute(query)
-            channel = result.scalar_one_or_none()
-
-            if not channel:
-                return f"Channel '{channel_name}' not found."
-
-            # ACL check: verify user has access to this channel
-            # Check both legacy slack_channel_id and normalized external_channel_id
-            ext_id = getattr(channel, "external_channel_id", None)
-            has_slack_access = channel.slack_channel_id in user_channel_ids
-            has_ext_access = ext_id and ext_id in user_channel_ids
-            has_uuid_access = (
-                canonical_channel_ids is not None
-                and channel.id in canonical_channel_ids
-            )
-            if not (has_slack_access or has_ext_access or has_uuid_access):
-                if channel.channel_type != ChannelType.PUBLIC:
+                if not _can_read_channel(
+                    channel, user_channel_ids, canonical_channel_ids
+                ):
                     return (
-                        f"You don't have access to #{channel_name}. "
+                        f"You don't have access to #{channel.name}. "
                         f"It's a {channel.channel_type.value} channel."
                     )
 
-            msg_query = (
-                select(Message)
-                .where(
-                    Message.channel_id == channel.id,
-                    or_(
-                        Message.sent_at >= since,
-                        Message.slack_sent_at >= since,
-                    ),
+                msg_query = (
+                    select(Message)
+                    .where(
+                        Message.workspace_id == workspace_id,
+                        Message.channel_id == channel.id,
+                        or_(
+                            Message.sent_at >= since,
+                            Message.slack_sent_at >= since,
+                        ),
+                    )
+                    .order_by(Message.slack_sent_at.desc())
+                    .limit(limit)
                 )
-                .order_by(Message.slack_sent_at.desc())
-                .limit(limit)
-            )
-            msg_result = await session.execute(msg_query)
-            messages = msg_result.scalars().all()
+                msg_result = await session.execute(msg_query)
+                messages = msg_result.scalars().all()
 
-            if not messages:
-                return f"No messages in #{channel_name} in the last {hours} hours."
+                if not messages:
+                    return f"No messages in #{channel.name} in the last {hours} hours."
 
-            formatted = []
-            for msg in reversed(messages):  # Chronological order
-                ts = msg.sent_at or msg.slack_sent_at
-                time_str = ts.strftime("%H:%M") if ts else "??:??"
-                content = msg.content[:200] if msg.content else "[no content]"
-                formatted.append(f"[{time_str}] {content}")
+                formatted = []
+                for msg in reversed(messages):
+                    ts = msg.sent_at or msg.slack_sent_at
+                    time_str = (
+                        ts.strftime("%Y-%m-%d %H:%M UTC") if ts else "unknown time"
+                    )
+                    thread = f" thread={msg.thread_ts}" if msg.thread_ts else ""
+                    content = msg.content[:500] if msg.content else "[no content]"
+                    formatted.append(f"[{time_str}]{thread} {content}")
 
-            return (
-                f"Recent messages in #{channel_name} "
-                f"(last {hours}h, {len(messages)} messages):\n\n" + "\n".join(formatted)
-            )
+                return (
+                    f"Recent messages in #{channel.name} "
+                    f"(last {hours}h, {len(messages)} messages):\n\n"
+                    + "\n".join(formatted)
+                )
+
+        return await _run_tool_with_timeout(_run(), "get_recent_messages")
 
     @tool
     async def list_channels() -> str:
-        """List channels the user has access to in the workspace.
+        """List readable non-archived channels in the workspace."""
 
-        Use this when the user asks about available channels, or when you
-        need to find which channel a topic might be discussed in.
-        """
-        async with AsyncSessionLocal() as session:
-            # Build membership condition — check Slack IDs and canonical UUIDs
-            membership_conditions = [
-                Channel.slack_channel_id.in_(user_channel_ids),
-                Channel.channel_type == ChannelType.PUBLIC,
-            ]
-            if user_channel_ids:
-                membership_conditions.append(
-                    Channel.external_channel_id.in_(user_channel_ids)
+        async def _run() -> str:
+            async with AsyncSessionLocal() as session:
+                membership_conditions = [
+                    Channel.channel_type == ChannelType.PUBLIC,
+                ]
+                if user_channel_ids:
+                    membership_conditions.extend(
+                        [
+                            Channel.slack_channel_id.in_(user_channel_ids),
+                            Channel.external_channel_id.in_(user_channel_ids),
+                        ]
+                    )
+                if canonical_channel_ids:
+                    membership_conditions.append(Channel.id.in_(canonical_channel_ids))
+
+                result = await session.execute(
+                    select(Channel)
+                    .where(
+                        Channel.workspace_id == workspace_id,
+                        Channel.is_archived.is_(False),
+                        Channel.channel_type.notin_(
+                            [ChannelType.DM, ChannelType.GROUP_DM]
+                        ),
+                        or_(*membership_conditions),
+                    )
+                    .order_by(Channel.name)
+                    .limit(50)
                 )
-            if canonical_channel_ids:
-                membership_conditions.append(Channel.id.in_(canonical_channel_ids))
+                channels = result.scalars().all()
 
-            query = (
-                select(Channel)
-                .where(
-                    Channel.is_archived.is_(False),
-                    or_(*membership_conditions),
-                )
-                .order_by(Channel.name)
-                .limit(50)
-            )
-            result = await session.execute(query)
-            channels = result.scalars().all()
+                if not channels:
+                    return "No channels found."
 
-            if not channels:
-                return "No channels found."
+                formatted = []
+                for channel in channels:
+                    purpose = f" - {channel.purpose[:60]}..." if channel.purpose else ""
+                    member_indicator = (
+                        " [member]"
+                        if _is_member_channel(
+                            channel, user_channel_ids, canonical_channel_ids
+                        )
+                        else ""
+                    )
+                    formatted.append(
+                        f"- #{channel.name} ({channel.channel_type.value}, "
+                        f"{channel.member_count} members){member_indicator}{purpose}"
+                    )
 
-            # Build a set for quick membership lookup
-            member_ext_ids = set(user_channel_ids)
-            member_uuid_set = set(canonical_channel_ids or [])
+                return f"Channels ({len(channels)}):\n" + "\n".join(formatted)
 
-            formatted = []
-            for ch in channels:
-                purpose = f" — {ch.purpose[:60]}..." if ch.purpose else ""
-                ext_id = getattr(ch, "external_channel_id", None)
-                is_member = (
-                    ch.slack_channel_id in member_ext_ids
-                    or (ext_id and ext_id in member_ext_ids)
-                    or ch.id in member_uuid_set
-                )
-                member_indicator = " ✓" if is_member else ""
-                formatted.append(
-                    f"• #{ch.name} ({ch.channel_type.value}, "
-                    f"{ch.member_count} members){member_indicator}{purpose}"
-                )
+        return await _run_tool_with_timeout(_run(), "list_channels")
 
-            return f"Channels ({len(channels)}):\n" + "\n".join(formatted)
-
-    @tool
+    @tool(args_schema=ChannelActivityArgs)
     async def get_channel_activity_summary(
         channel_name: str = "",
         hours: int = 24,
     ) -> str:
-        """Get a quick activity summary for a channel.
+        """Get lightweight activity counts for a specific accessible channel."""
 
-        Use this to get stats about a channel's recent activity without
-        reading all messages. Useful for deciding which channels to
-        include in a digest.
+        async def _run() -> str:
+            normalized_name = channel_name.lstrip("#") if channel_name else ""
+            async with AsyncSessionLocal() as session:
+                since = datetime.now(timezone.utc) - timedelta(hours=hours)
 
-        Args:
-            channel_name: Name of the Slack channel (without #).
-            hours: How many hours back to look (default: 24).
-        """
-        async with AsyncSessionLocal() as session:
-            since = datetime.now(timezone.utc) - timedelta(hours=hours)
+                result = await session.execute(
+                    select(Channel).where(
+                        Channel.workspace_id == workspace_id,
+                        Channel.name.ilike(f"%{normalized_name}%"),
+                    )
+                )
+                channel = result.scalar_one_or_none()
+                if not channel:
+                    return f"Channel '{channel_name}' not found."
 
-            query = select(Channel).where(Channel.name.ilike(f"%{channel_name}%"))
-            result = await session.execute(query)
-            channel = result.scalar_one_or_none()
-
-            if not channel:
-                return f"Channel '{channel_name}' not found."
-
-            # ACL check: verify user has access
-            ext_id = getattr(channel, "external_channel_id", None)
-            has_slack_access = channel.slack_channel_id in user_channel_ids
-            has_ext_access = ext_id and ext_id in user_channel_ids
-            has_uuid_access = (
-                canonical_channel_ids is not None
-                and channel.id in canonical_channel_ids
-            )
-            if not (has_slack_access or has_ext_access or has_uuid_access):
-                if channel.channel_type != ChannelType.PUBLIC:
+                if not _can_read_channel(
+                    channel, user_channel_ids, canonical_channel_ids
+                ):
                     return (
-                        f"You don't have access to #{channel_name}. "
+                        f"You don't have access to #{channel.name}. "
                         f"It's a {channel.channel_type.value} channel."
                     )
 
-            # Count messages
-            count_query = select(func.count(Message.id)).where(
-                Message.channel_id == channel.id,
-                or_(
-                    Message.sent_at >= since,
-                    Message.slack_sent_at >= since,
-                ),
-            )
-            msg_count = (await session.execute(count_query)).scalar() or 0
+                count_query = select(func.count(Message.id)).where(
+                    Message.workspace_id == workspace_id,
+                    Message.channel_id == channel.id,
+                    or_(Message.sent_at >= since, Message.slack_sent_at >= since),
+                )
+                msg_count = (await session.execute(count_query)).scalar() or 0
 
-            # Count threads
-            thread_query = select(func.count(func.distinct(Message.thread_ts))).where(
-                Message.channel_id == channel.id,
-                or_(
-                    Message.sent_at >= since,
-                    Message.slack_sent_at >= since,
-                ),
-                Message.thread_ts.isnot(None),
-            )
-            thread_count = (await session.execute(thread_query)).scalar() or 0
+                thread_query = select(
+                    func.count(func.distinct(Message.thread_ts))
+                ).where(
+                    Message.workspace_id == workspace_id,
+                    Message.channel_id == channel.id,
+                    or_(Message.sent_at >= since, Message.slack_sent_at >= since),
+                    Message.thread_ts.isnot(None),
+                )
+                thread_count = (await session.execute(thread_query)).scalar() or 0
 
-            return (
-                f"#{channel_name} activity (last {hours}h):\n"
-                f"• Messages: {msg_count}\n"
-                f"• Active threads: {thread_count}\n"
-                f"• Channel type: {channel.channel_type.value}\n"
-                f"• Members: {channel.member_count}"
-            )
+                return (
+                    f"#{channel.name} activity (last {hours}h):\n"
+                    f"- Messages: {msg_count}\n"
+                    f"- Active threads: {thread_count}\n"
+                    f"- Channel type: {channel.channel_type.value}\n"
+                    f"- Members: {channel.member_count}"
+                )
 
-    @tool
+        return await _run_tool_with_timeout(_run(), "get_channel_activity_summary")
+
+    @tool(args_schema=GenerateDigestArgs)
     async def generate_digest(
         channel_name: str = "",
         hours: int = 24,
         personalized: bool = False,
     ) -> str:
-        """Generate a summary digest for a channel's recent activity.
+        """Generate an LLM digest for a channel or accessible channel set."""
 
-        Use this when the user asks for a summary, digest, or recap of
-        what happened in a channel. Returns a structured summary of key
-        discussions, action items, and notable activity.
+        async def _run() -> str:
+            from app.services.digest_service import digest_service
 
-        When personalized=True, generates a digest across ALL channels the
-        user has access to (including private channels), not just public ones.
-        Use personalized mode when the user says things like "my digest",
-        "summarize my channels", or "what did I miss".
+            normalized_name = channel_name.lstrip("#") if channel_name else ""
 
-        Args:
-            channel_name: Name of the Slack channel (without #). Empty = all accessible channels.
-            hours: How many hours back to summarize (default: 24).
-            personalized: If True, include private channels the user has access to.
-        """
-        from app.services.digest_service import digest_service
-
-        # Personalized digest: all channels the user is a member of
-        if personalized and not channel_name:
-            result = await digest_service.generate_personalized_digest(
-                user_slack_id=user_slack_id,
-                canonical_user_id=canonical_user_id,
-                hours=hours,
-            )
-            if result:
-                return f"📋 *Your Personalized Digest*\n\n{result}"
-            else:
+            if personalized and not normalized_name:
+                result = await digest_service.generate_personalized_digest(
+                    user_slack_id=user_slack_id,
+                    canonical_user_id=canonical_user_id,
+                    workspace_id=workspace_id,
+                    hours=hours,
+                )
+                if result:
+                    return f"*Your Personalized Digest*\n\n{result}"
                 return (
                     "No significant activity across your channels "
                     f"in the last {hours} hours."
                 )
 
-        if channel_name:
-            # Generate for a specific channel
-            async with AsyncSessionLocal() as session:
-                from app.models.workspace import Workspace
+            if normalized_name:
+                async with AsyncSessionLocal() as session:
+                    workspace_exists = await session.get(Workspace, workspace_id)
+                    if not workspace_exists:
+                        return "No active workspace found."
 
-                ws_result = await session.execute(
-                    select(Workspace).where(Workspace.is_active.is_(True)).limit(1)
-                )
-                workspace = ws_result.scalar_one_or_none()
-                if not workspace:
-                    return "No active workspace found."
+                    result = await session.execute(
+                        select(Channel).where(
+                            Channel.workspace_id == workspace_id,
+                            Channel.name.ilike(f"%{normalized_name}%"),
+                        )
+                    )
+                    channel = result.scalar_one_or_none()
+                    if not channel:
+                        return f"Channel '{channel_name}' not found."
 
-                query = select(Channel).where(Channel.name.ilike(f"%{channel_name}%"))
-                result = await session.execute(query)
-                channel = result.scalar_one_or_none()
-
-                if not channel:
-                    return f"Channel '{channel_name}' not found."
-
-                # ACL check: skip private channels user isn't in
-                ext_id = getattr(channel, "external_channel_id", None)
-                has_slack = channel.slack_channel_id in user_channel_ids
-                has_ext = ext_id and ext_id in user_channel_ids
-                has_uuid = (
-                    canonical_channel_ids is not None
-                    and channel.id in canonical_channel_ids
-                )
-                if not (has_slack or has_ext or has_uuid):
-                    if channel.channel_type != ChannelType.PUBLIC:
+                    if not _can_read_channel(
+                        channel, user_channel_ids, canonical_channel_ids
+                    ):
                         return (
-                            f"You don't have access to #{channel_name}. "
+                            f"You don't have access to #{channel.name}. "
                             f"It's a {channel.channel_type.value} channel."
                         )
 
-                digest = await digest_service.generate_channel_digest(
-                    channel_id=channel.id,
-                    workspace_id=workspace.id,
-                    hours=hours,
-                )
+                    digest = await digest_service.generate_channel_digest(
+                        channel_id=channel.id,
+                        workspace_id=workspace_id,
+                        hours=hours,
+                    )
 
-            if digest:
-                return f"Digest for #{channel_name}:\n\n{digest.content}"
-            else:
+                if digest:
+                    return f"Digest for #{channel.name}:\n\n{digest.content}"
                 return (
-                    f"No significant activity in #{channel_name} "
+                    f"No significant activity in #{channel.name} "
                     f"in the last {hours} hours."
                 )
-        else:
-            # Generate for all accessible channels
-            digests = await digest_service.generate_daily_digest()
+
+            digests = await digest_service.generate_daily_digest(
+                workspace_id=workspace_id,
+                hours=hours,
+            )
             if digests:
-                # Filter to channels user has access to
-                accessible = [
-                    d
-                    for d in digests
-                    if d.channel_id is None  # workspace-level
-                ]
-                parts = [d.content for d in (accessible or digests)]
-                return "Daily Digest:\n\n" + "\n\n---\n\n".join(parts)
-            else:
-                return "No significant activity across channels in the last 24 hours."
+                return "Daily Digest:\n\n" + "\n\n---\n\n".join(
+                    digest.content for digest in digests
+                )
+            return f"No significant activity across channels in the last {hours} hours."
+
+        return await _run_tool_with_timeout(_run(), "generate_digest")
+
+    @tool(args_schema=SummarizeActivityArgs)
+    async def summarize_activity(
+        channel_name: str | None = None,
+        hours: int = 24,
+        topic: str | None = None,
+        personalized: bool = True,
+    ) -> str:
+        """Summarize recent activity from direct message queries, not vector top-k.
+
+        Use this for broad time-window summaries and recap requests such as
+        "what did we discuss yesterday", "summarize my channels", or
+        "give me a summary for the past week".
+        """
+
+        async def _run() -> str:
+            from app.services.digest_service import digest_service
+
+            result = await digest_service.summarize_activity(
+                workspace_id=workspace_id,
+                user_slack_id=user_slack_id,
+                user_channel_ids=user_channel_ids,
+                canonical_user_id=canonical_user_id,
+                canonical_channel_ids=canonical_channel_ids,
+                channel_name=channel_name,
+                hours=hours,
+                topic=topic,
+                personalized=personalized,
+            )
+            if result:
+                return result
+            return "I do not have enough recent evidence in that time window."
+
+        return await _run_tool_with_timeout(_run(), "summarize_activity")
 
     return [
         search_knowledge,
@@ -404,4 +536,5 @@ def create_tools(
         list_channels,
         get_channel_activity_summary,
         generate_digest,
+        summarize_activity,
     ]

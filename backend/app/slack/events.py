@@ -73,9 +73,19 @@ def register_event_handlers(app: AsyncApp) -> None:
         Covers: new messages, edits, deletions, bot messages,
         thread replies, and system messages (join/leave/topic).
         """
-        # Skip message subtypes we don't want to ingest
+        # Route deletions to the tombstone path so old chunks are removed.
         subtype = event.get("subtype")
-        skip_subtypes = {"message_deleted", "channel_join", "channel_leave"}
+        if subtype == "message_deleted":
+            from app.services.ingestion import handle_message_delete
+
+            try:
+                await handle_message_delete(event)
+            except Exception as e:
+                logger.error(f"Failed to handle message deletion: {e}", exc_info=True)
+            return
+
+        # Skip message subtypes we don't want to ingest
+        skip_subtypes = {"channel_join", "channel_leave"}
 
         if subtype in skip_subtypes:
             logger.debug(f"Skipping message subtype: {subtype}")
@@ -296,14 +306,56 @@ def register_event_handlers(app: AsyncApp) -> None:
         user_channel_ids = await _get_membership_service().get_user_channel_ids(user)
         principal = await resolve_slack_principal(user)
 
+        # Fallback: if no UserPlatformMapping exists (Slack-only setup
+        # without OIDC), resolve workspace from the SlackUser record.
+        workspace_id = None
+        canonical_user_id = None
+        if principal and principal.workspace_id:
+            workspace_id = principal.workspace_id
+            canonical_user_id = principal.user_id
+        else:
+            from sqlalchemy import select
+
+            from app.models.user import SlackUser
+            from app.models.workspace import Workspace
+
+            session_factory = _get_async_session_local()
+            async with session_factory() as session:
+                ws_result = await session.execute(
+                    select(Workspace).where(Workspace.is_active.is_(True)).limit(1)
+                )
+                workspace = ws_result.scalar_one_or_none()
+                if workspace:
+                    workspace_id = workspace.id
+                    # Try to get internal user id from SlackUser
+                    su_result = await session.execute(
+                        select(SlackUser.id).where(
+                            SlackUser.slack_user_id == user,
+                            SlackUser.workspace_id == workspace.id,
+                        )
+                    )
+                    su_id = su_result.scalar_one_or_none()
+                    if su_id:
+                        canonical_user_id = su_id
+
+            if not workspace_id:
+                await say(
+                    text=(
+                        "I couldn't verify your workspace identity, so I can't search "
+                        "or summarize workspace data for this request."
+                    ),
+                    thread_ts=thread_ts,
+                )
+                return
+
         response = await agent_service.process_message(
             user_slack_id=user,
             message=text,
             channel_id=channel,
             thread_ts=thread_ts,
             user_channel_ids=user_channel_ids,
-            canonical_user_id=principal.user_id if principal else None,
-            workspace_id=principal.workspace_id if principal else None,
+            canonical_user_id=canonical_user_id,
+            workspace_id=workspace_id,
         )
 
         # Reply in thread
