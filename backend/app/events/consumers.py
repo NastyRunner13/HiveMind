@@ -6,7 +6,12 @@ Currently implements:
   and indexes messages into the Knowledge Fabric (document_chunks).
 
 Architecture:
-  Slack Event → Ingestion → Redis Event Bus → [This Consumer] → Knowledge Fabric
+  Platform Event → Ingestion → Redis Event Bus → [This Consumer] → Knowledge Fabric
+
+All events are expected to use normalized payloads with canonical internal
+UUIDs (channel_id, message_id).  Legacy Slack-specific field parsing was
+removed after the M4 canonical identity cutover confirmed that every
+publisher emits normalized_payload() exclusively.
 
 The consumer runs as an asyncio background task inside the FastAPI process.
 This is simpler to deploy than a separate worker and sufficient for
@@ -22,8 +27,6 @@ Reliability:
 import asyncio
 import logging
 import uuid
-
-from sqlalchemy import select
 
 from app.config import get_settings
 from app.database import AsyncSessionLocal
@@ -43,46 +46,33 @@ STREAM_NAME = "hivemind-events"
 async def _load_message_context(
     session, data: dict
 ) -> tuple[Channel | None, Message | None]:
-    """Load normalized events by UUID, with a legacy Slack-event fallback."""
+    """Load channel and message entities from normalized event UUIDs.
+
+    Returns (channel, message) if both canonical UUIDs resolve to
+    existing, matched entities. Returns (None, None) otherwise.
+
+    Security: verifies that message.channel_id == channel.id to
+    prevent ACL spoofing via forged event payloads.
+    """
     internal_channel_id = data.get("channel_id")
     internal_message_id = data.get("message_id")
-    if internal_channel_id and internal_message_id:
-        try:
-            channel_id = uuid.UUID(str(internal_channel_id))
-            message_id = uuid.UUID(str(internal_message_id))
-        except ValueError:
-            logger.warning("Message event contains invalid internal UUIDs: %s", data)
-            return None, None
-
-        channel = await session.get(Channel, channel_id)
-        message = await session.get(Message, message_id)
-        if not channel or not message or message.channel_id != channel.id:
-            logger.warning(
-                "Message event references unknown or mismatched entities: %s", data
-            )
-            return None, None
-        return channel, message
-
-    slack_channel_id = data.get("slack_channel_id")
-    slack_message_ts = data.get("slack_message_ts")
-    if not slack_channel_id or not slack_message_ts:
+    if not internal_channel_id or not internal_message_id:
+        logger.warning("Event missing required channel_id/message_id: %s", data)
         return None, None
 
-    channel_result = await session.execute(
-        select(Channel).where(Channel.slack_channel_id == slack_channel_id)
-    )
-    channel = channel_result.scalar_one_or_none()
-    if not channel:
-        logger.warning("Channel %s not found for indexing", slack_channel_id)
+    try:
+        channel_id = uuid.UUID(str(internal_channel_id))
+        message_id = uuid.UUID(str(internal_message_id))
+    except ValueError:
+        logger.warning("Event contains invalid UUIDs: %s", data)
         return None, None
 
-    message_result = await session.execute(
-        select(Message).where(
-            Message.channel_id == channel.id,
-            Message.slack_message_ts == slack_message_ts,
-        )
-    )
-    return channel, message_result.scalar_one_or_none()
+    channel = await session.get(Channel, channel_id)
+    message = await session.get(Message, message_id)
+    if not channel or not message or message.channel_id != channel.id:
+        logger.warning("Event references unknown or mismatched entities: %s", data)
+        return None, None
+    return channel, message
 
 
 def _parse_uuid(value: object) -> uuid.UUID | None:
@@ -96,25 +86,12 @@ def _parse_uuid(value: object) -> uuid.UUID | None:
 
 
 async def _resolve_channel_from_event_data(session, data: dict) -> Channel | None:
-    """Resolve a channel from normalized or legacy event payload fields."""
+    """Resolve a channel from normalized event payload channel_id UUID."""
     channel_id = _parse_uuid(data.get("channel_id"))
-    if channel_id:
-        return await session.get(Channel, channel_id)
-
-    external_metadata = data.get("external_metadata") or {}
-    slack_channel_id = data.get("slack_channel_id") or external_metadata.get(
-        "channel_id"
-    )
-    if not slack_channel_id:
+    if not channel_id:
+        logger.warning("Event missing required channel_id: %s", data)
         return None
-
-    filters = [Channel.slack_channel_id == slack_channel_id]
-    workspace_id = _parse_uuid(data.get("workspace_id"))
-    if workspace_id:
-        filters.append(Channel.workspace_id == workspace_id)
-
-    result = await session.execute(select(Channel).where(*filters).limit(1))
-    return result.scalar_one_or_none()
+    return await session.get(Channel, channel_id)
 
 
 async def _process_message_ingested(event_data: dict) -> None:
@@ -123,65 +100,17 @@ async def _process_message_ingested(event_data: dict) -> None:
     into the Knowledge Fabric.
 
     Steps:
-    1. Fetch the channel from DB using slack_channel_id
-    2. Fetch the message using channel_id + slack_message_ts
-       (prevents cross-channel timestamp collisions)
-    3. Check idempotency — skip if already indexed
-    4. Call knowledge_service.index_message()
+    1. Load channel and message from canonical UUIDs
+    2. Check idempotency — skip if already indexed
+    3. Call knowledge_service.index_message()
     """
     from app.services.knowledge_service import knowledge_service
 
     data = event_data.get("data", {})
-    if data.get("channel_id") and data.get("message_id"):
-        async with AsyncSessionLocal() as session:
-            channel, message = await _load_message_context(session, data)
-        if not channel or not message:
-            return
-        if await knowledge_service.is_already_indexed(message.id):
-            return
-        await knowledge_service.index_message(message=message, channel=channel)
-        return
-
-    slack_channel_id = data.get("slack_channel_id")
-    slack_message_ts = data.get("slack_message_ts")
-
-    if not slack_channel_id or not slack_message_ts:
-        logger.warning(f"MESSAGE_INGESTED event missing required fields: {data}")
-        return
-
     async with AsyncSessionLocal() as session:
-        # Find the channel FIRST — needed for scoped message lookup
-        ch_result = await session.execute(
-            select(Channel).where(
-                Channel.slack_channel_id == slack_channel_id,
-            )
-        )
-        channel = ch_result.scalar_one_or_none()
-
-        if not channel:
-            logger.warning(f"Channel {slack_channel_id} not found for indexing")
-            return
-
-        # Find the message — use channel_id to prevent cross-channel
-        # timestamp collisions. The model uniqueness constraint is
-        # (workspace_id, channel_id, slack_message_ts), so ts alone
-        # is NOT unique. Without channel_id, a collision could index
-        # the wrong message under the wrong channel's ACL.
-        msg_result = await session.execute(
-            select(Message).where(
-                Message.channel_id == channel.id,
-                Message.slack_message_ts == slack_message_ts,
-            )
-        )
-        message = msg_result.scalar_one_or_none()
-
-        if not message:
-            logger.debug(
-                f"Message {slack_message_ts} in channel "
-                f"{slack_channel_id} not found in DB — "
-                f"may not have been committed yet, skipping"
-            )
-            return
+        channel, message = await _load_message_context(session, data)
+    if not channel or not message:
+        return
 
     # Idempotency check — skip if already indexed
     if await knowledge_service.is_already_indexed(message.id):
@@ -215,44 +144,10 @@ async def _process_message_edited(event_data: dict) -> None:
     from app.services.knowledge_service import knowledge_service
 
     data = event_data.get("data", {})
-    if data.get("channel_id") and data.get("message_id"):
-        async with AsyncSessionLocal() as session:
-            channel, message = await _load_message_context(session, data)
-        if not channel or not message:
-            return
-        await knowledge_service.delete_chunks_for_source(message.id)
-        await knowledge_service.index_message(message=message, channel=channel)
-        return
-
-    slack_channel_id = data.get("slack_channel_id")
-    slack_message_ts = data.get("slack_message_ts")
-
-    if not slack_channel_id or not slack_message_ts:
-        return
-
     async with AsyncSessionLocal() as session:
-        # Find channel first for scoped message lookup
-        ch_result = await session.execute(
-            select(Channel).where(
-                Channel.slack_channel_id == slack_channel_id,
-            )
-        )
-        channel = ch_result.scalar_one_or_none()
-
-        if not channel:
-            return
-
-        # Scoped lookup: channel_id + timestamp (prevents collisions)
-        msg_result = await session.execute(
-            select(Message).where(
-                Message.channel_id == channel.id,
-                Message.slack_message_ts == slack_message_ts,
-            )
-        )
-        message = msg_result.scalar_one_or_none()
-
-        if not message:
-            return
+        channel, message = await _load_message_context(session, data)
+    if not channel or not message:
+        return
 
     # Delete old chunks and re-index
     try:
@@ -287,42 +182,10 @@ async def _process_message_deleted(event_data: dict) -> None:
     from app.services.knowledge_service import knowledge_service
 
     data = event_data.get("data", {})
-    if data.get("channel_id") and data.get("message_id"):
-        async with AsyncSessionLocal() as session:
-            _channel, message = await _load_message_context(session, data)
-        if not message:
-            return
-        await knowledge_service.delete_chunks_for_source(message.id)
-        return
-
-    external_metadata = data.get("external_metadata") or {}
-    slack_channel_id = data.get("slack_channel_id") or external_metadata.get(
-        "channel_id"
-    )
-    slack_message_ts = data.get("slack_message_ts") or external_metadata.get(
-        "message_ts"
-    )
-
-    if not slack_channel_id or not slack_message_ts:
-        return
-
     async with AsyncSessionLocal() as session:
-        ch_result = await session.execute(
-            select(Channel).where(Channel.slack_channel_id == slack_channel_id)
-        )
-        channel = ch_result.scalar_one_or_none()
-        if not channel:
-            return
-
-        msg_result = await session.execute(
-            select(Message).where(
-                Message.channel_id == channel.id,
-                Message.slack_message_ts == slack_message_ts,
-            )
-        )
-        message = msg_result.scalar_one_or_none()
-        if not message:
-            return
+        _channel, message = await _load_message_context(session, data)
+    if not message:
+        return
 
     await knowledge_service.delete_chunks_for_source(message.id)
 

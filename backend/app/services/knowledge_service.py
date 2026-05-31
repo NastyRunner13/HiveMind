@@ -372,10 +372,8 @@ class KnowledgeService:
         query: str,
         *,
         workspace_id: uuid.UUID,
-        user_channel_ids: list[str] | None = None,
-        user_slack_id: str | None = None,
-        user_channel_uuids: list[uuid.UUID] | None = None,
-        user_id: uuid.UUID | None = None,
+        user_channel_uuids: list[uuid.UUID],
+        user_id: uuid.UUID,
         since: datetime | None = None,
         until: datetime | None = None,
         source_types: list[SourceType] | None = None,
@@ -391,11 +389,9 @@ class KnowledgeService:
 
         Args:
             query: The natural language search query.
-            user_channel_ids: Slack channel IDs the user is a member of.
-            user_slack_id: The user's Slack ID (for explicit access checks).
-            user_channel_uuids: Internal channel IDs for an authenticated API user.
-            user_id: Internal authenticated user ID for explicit access checks.
             workspace_id: Limit search to a specific workspace.
+            user_channel_uuids: Internal channel UUIDs the user is a member of.
+            user_id: Canonical user UUID for explicit access checks.
             since: Include only chunks whose source timestamp is at or after this.
             until: Include only chunks whose source timestamp is at or before this.
             source_types: Optional source type filter.
@@ -425,48 +421,21 @@ class KnowledgeService:
         async with AsyncSessionLocal() as session:
             # Build the ACL filter (OR conditions — user can see if ANY match)
             acl_conditions = [
-                # Condition 1: Public content
+                # Public content — visible to everyone in org
                 DocumentChunk.confidentiality == Confidentiality.PUBLIC,
+                # User's channel membership (UUID)
+                DocumentChunk.source_channel_uuid.in_(user_channel_uuids),
+                DocumentChunk.allowed_channel_uuids.overlap(user_channel_uuids),
+                # Explicit user access (UUID)
+                DocumentChunk.allowed_user_uuids.contains([user_id]),
             ]
-
-            if user_channel_ids:
-                # Condition 2: User is a member of the source channel
-                acl_conditions.append(
-                    DocumentChunk.source_channel_id.in_(user_channel_ids)
-                )
-                # Condition 3: Channel is in the allowed list
-                acl_conditions.append(
-                    DocumentChunk.allowed_channel_ids.overlap(user_channel_ids)
-                )
-
-            if user_slack_id:
-                # Condition 4: User has explicit access
-                acl_conditions.append(
-                    DocumentChunk.allowed_user_ids.contains([user_slack_id])
-                )
-
-            if user_channel_uuids:
-                acl_conditions.append(
-                    DocumentChunk.source_channel_uuid.in_(user_channel_uuids)
-                )
-                acl_conditions.append(
-                    DocumentChunk.allowed_channel_uuids.overlap(user_channel_uuids)
-                )
-
-            if user_id:
-                acl_conditions.append(
-                    DocumentChunk.allowed_user_uuids.contains([user_id])
-                )
 
             filters = [
                 DocumentChunk.workspace_id == workspace_id,
                 or_(*acl_conditions),
                 DocumentChunk.embedding.isnot(None),
                 or_(
-                    and_(
-                        DocumentChunk.source_channel_uuid.is_(None),
-                        DocumentChunk.source_channel_id.is_(None),
-                    ),
+                    DocumentChunk.source_channel_uuid.is_(None),
                     Channel.channel_type.notin_([ChannelType.DM, ChannelType.GROUP_DM]),
                 ),
             ]
@@ -507,10 +476,7 @@ class KnowledgeService:
                     Channel,
                     and_(
                         Channel.workspace_id == DocumentChunk.workspace_id,
-                        or_(
-                            Channel.id == DocumentChunk.source_channel_uuid,
-                            Channel.slack_channel_id == DocumentChunk.source_channel_id,
-                        ),
+                        Channel.id == DocumentChunk.source_channel_uuid,
                     ),
                 )
                 .outerjoin(SlackUser, SlackUser.id == DocumentChunk.source_author_id)
@@ -555,8 +521,7 @@ class KnowledgeService:
                 {
                     "query_length": len(query),
                     "results_count": len(results),
-                    "user_slack_id": user_slack_id,
-                    "user_id": str(user_id) if user_id else None,
+                    "user_id": str(user_id),
                     "workspace_id": str(workspace_id),
                 },
             )
@@ -664,10 +629,7 @@ class KnowledgeService:
 
             chunk_filter = and_(
                 DocumentChunk.workspace_id == channel.workspace_id,
-                or_(
-                    DocumentChunk.source_channel_uuid == channel.id,
-                    DocumentChunk.source_channel_id == channel.slack_channel_id,
-                ),
+                DocumentChunk.source_channel_uuid == channel.id,
             )
 
             if channel.channel_type in (ChannelType.DM, ChannelType.GROUP_DM):

@@ -107,30 +107,20 @@ class SummarizeActivityArgs(BaseModel):
 
 def _is_member_channel(
     channel: Channel,
-    user_channel_ids: list[str],
-    canonical_channel_ids: list[uuid.UUID] | None,
+    user_channel_ids: list[uuid.UUID],
 ) -> bool:
     """Return whether the server-derived membership context includes channel."""
-    ext_id = getattr(channel, "external_channel_id", None)
-    return (
-        channel.slack_channel_id in user_channel_ids
-        or (bool(ext_id) and ext_id in user_channel_ids)
-        or (
-            canonical_channel_ids is not None
-            and channel.id in set(canonical_channel_ids)
-        )
-    )
+    return channel.id in set(user_channel_ids)
 
 
 def _can_read_channel(
     channel: Channel,
-    user_channel_ids: list[str],
-    canonical_channel_ids: list[uuid.UUID] | None,
+    user_channel_ids: list[uuid.UUID],
 ) -> bool:
     """Enforce channel read access for agent tools."""
     if channel.channel_type == ChannelType.PUBLIC:
         return True
-    return _is_member_channel(channel, user_channel_ids, canonical_channel_ids)
+    return _is_member_channel(channel, user_channel_ids)
 
 
 def _safe_since_until(
@@ -150,20 +140,18 @@ def _safe_since_until(
 
 def create_tools(
     user_slack_id: str,
-    user_channel_ids: list[str],
     workspace_id: uuid.UUID,
-    canonical_user_id: uuid.UUID | None = None,
-    canonical_channel_ids: list[uuid.UUID] | None = None,
+    user_id: uuid.UUID,
+    user_channel_ids: list[uuid.UUID],
 ) -> list:
     """
     Create agent tools with trusted user and workspace context baked in.
 
     Args:
-        user_slack_id: Authenticated Slack user ID.
-        user_channel_ids: Slack channel IDs the user belongs to.
+        user_slack_id: Authenticated Slack user ID (kept for legacy/logging).
         workspace_id: Internal workspace UUID. Required for all retrieval.
-        canonical_user_id: Internal user UUID, when available.
-        canonical_channel_ids: Internal channel UUIDs the user can access.
+        user_id: Canonical user UUID.
+        user_channel_ids: Internal channel UUIDs the user can access.
 
     Returns:
         LangChain tools scoped to this user and workspace.
@@ -189,10 +177,8 @@ def create_tools(
             results = await knowledge_service.search(
                 query=query,
                 workspace_id=workspace_id,
-                user_channel_ids=user_channel_ids,
-                user_slack_id=user_slack_id,
-                user_channel_uuids=canonical_channel_ids,
-                user_id=canonical_user_id,
+                user_channel_uuids=user_channel_ids,
+                user_id=user_id,
                 since=resolved_since,
                 until=resolved_until,
                 top_k=top_k,
@@ -262,9 +248,7 @@ def create_tools(
                 if not channel:
                     return f"Channel '{channel_name}' not found."
 
-                if not _can_read_channel(
-                    channel, user_channel_ids, canonical_channel_ids
-                ):
+                if not _can_read_channel(channel, user_channel_ids):
                     return (
                         f"You don't have access to #{channel.name}. "
                         f"It's a {channel.channel_type.value} channel."
@@ -317,14 +301,7 @@ def create_tools(
                     Channel.channel_type == ChannelType.PUBLIC,
                 ]
                 if user_channel_ids:
-                    membership_conditions.extend(
-                        [
-                            Channel.slack_channel_id.in_(user_channel_ids),
-                            Channel.external_channel_id.in_(user_channel_ids),
-                        ]
-                    )
-                if canonical_channel_ids:
-                    membership_conditions.append(Channel.id.in_(canonical_channel_ids))
+                    membership_conditions.append(Channel.id.in_(user_channel_ids))
 
                 result = await session.execute(
                     select(Channel)
@@ -349,9 +326,7 @@ def create_tools(
                     purpose = f" - {channel.purpose[:60]}..." if channel.purpose else ""
                     member_indicator = (
                         " [member]"
-                        if _is_member_channel(
-                            channel, user_channel_ids, canonical_channel_ids
-                        )
+                        if _is_member_channel(channel, user_channel_ids)
                         else ""
                     )
                     formatted.append(
@@ -385,9 +360,7 @@ def create_tools(
                 if not channel:
                     return f"Channel '{channel_name}' not found."
 
-                if not _can_read_channel(
-                    channel, user_channel_ids, canonical_channel_ids
-                ):
+                if not _can_read_channel(channel, user_channel_ids):
                     return (
                         f"You don't have access to #{channel.name}. "
                         f"It's a {channel.channel_type.value} channel."
@@ -435,8 +408,7 @@ def create_tools(
 
             if personalized and not normalized_name:
                 result = await digest_service.generate_personalized_digest(
-                    user_slack_id=user_slack_id,
-                    canonical_user_id=canonical_user_id,
+                    user_id=user_id,
                     workspace_id=workspace_id,
                     hours=hours,
                 )
@@ -463,9 +435,7 @@ def create_tools(
                     if not channel:
                         return f"Channel '{channel_name}' not found."
 
-                    if not _can_read_channel(
-                        channel, user_channel_ids, canonical_channel_ids
-                    ):
+                    if not _can_read_channel(channel, user_channel_ids):
                         return (
                             f"You don't have access to #{channel.name}. "
                             f"It's a {channel.channel_type.value} channel."
@@ -515,10 +485,8 @@ def create_tools(
 
             result = await digest_service.summarize_activity(
                 workspace_id=workspace_id,
-                user_slack_id=user_slack_id,
+                user_id=user_id,
                 user_channel_ids=user_channel_ids,
-                canonical_user_id=canonical_user_id,
-                canonical_channel_ids=canonical_channel_ids,
                 channel_name=channel_name,
                 hours=hours,
                 topic=topic,

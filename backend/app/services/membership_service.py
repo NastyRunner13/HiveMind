@@ -113,6 +113,37 @@ class MembershipService:
             result = await session.execute(query)
             return [row[0] for row in result.all()]
 
+    async def get_user_channel_uuids(
+        self,
+        user_id: uuid.UUID,
+        workspace_id: uuid.UUID | None = None,
+    ) -> list[uuid.UUID]:
+        """Get all internal channel UUIDs a user is an active member of.
+
+        This is the primary ACL lookup for agent tools, knowledge search,
+        and digest scoping. Uses canonical_user_id for platform-neutral
+        identity resolution.
+
+        Args:
+            user_id: Canonical user UUID (resolved via OIDC/Keycloak or SlackUser lookup).
+            workspace_id: Optional workspace scope.
+
+        Returns:
+            List of internal channel UUIDs the user is a member of.
+        """
+        async with AsyncSessionLocal() as session:
+            query = select(ChannelMembership.channel_id).where(
+                and_(
+                    ChannelMembership.canonical_user_id == user_id,
+                    ChannelMembership.is_active.is_(True),
+                )
+            )
+            if workspace_id:
+                query = query.where(ChannelMembership.workspace_id == workspace_id)
+
+            result = await session.execute(query)
+            return [row[0] for row in result.all()]
+
     async def handle_member_joined(
         self,
         slack_user_id: str,

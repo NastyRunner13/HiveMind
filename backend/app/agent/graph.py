@@ -44,12 +44,9 @@ class AgentState(TypedDict):
 
     # User context for ACL filtering
     user_slack_id: str
-    user_channel_ids: list[str]
     workspace_id: uuid.UUID
-
-    # Canonical identity (set when caller is OIDC-authenticated)
-    canonical_user_id: uuid.UUID | None
-    canonical_channel_ids: list[uuid.UUID] | None
+    user_id: uuid.UUID
+    user_channel_ids: list[uuid.UUID]
 
 
 # ═════════════════════════════════════════════════════════════════
@@ -109,10 +106,9 @@ def should_continue(state: AgentState) -> str:
 
 def build_agent_graph(
     user_slack_id: str,
-    user_channel_ids: list[str],
     workspace_id: uuid.UUID,
-    canonical_user_id: uuid.UUID | None = None,
-    canonical_channel_ids: list[uuid.UUID] | None = None,
+    user_id: uuid.UUID,
+    user_channel_ids: list[uuid.UUID],
 ) -> StateGraph:
     """
     Build a user-scoped HiveMind agent graph.
@@ -129,10 +125,9 @@ def build_agent_graph(
 
     Args:
         user_slack_id: The authenticated user's Slack ID.
-        user_channel_ids: Slack channel IDs the user has access to.
         workspace_id: Internal workspace UUID used to scope every retrieval.
-        canonical_user_id: Internal user UUID (OIDC path).
-        canonical_channel_ids: Internal channel UUIDs the user has access to.
+        user_id: Canonical user UUID.
+        user_channel_ids: Internal channel UUIDs the user has access to.
 
     Returns:
         Compiled LangGraph graph ready for invocation.
@@ -142,10 +137,9 @@ def build_agent_graph(
     # Create user-scoped tools
     tools = create_tools(
         user_slack_id=user_slack_id,
-        user_channel_ids=user_channel_ids,
         workspace_id=workspace_id,
-        canonical_user_id=canonical_user_id,
-        canonical_channel_ids=canonical_channel_ids,
+        user_id=user_id,
+        user_channel_ids=user_channel_ids,
     )
 
     # Create the tool node from scoped tools

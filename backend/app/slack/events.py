@@ -303,16 +303,15 @@ def register_event_handlers(app: AsyncApp) -> None:
         from app.services.agent_service import agent_service
 
         # Derive trusted ACL context from DB — NOT from client
-        user_channel_ids = await _get_membership_service().get_user_channel_ids(user)
         principal = await resolve_slack_principal(user)
 
         # Fallback: if no UserPlatformMapping exists (Slack-only setup
         # without OIDC), resolve workspace from the SlackUser record.
         workspace_id = None
-        canonical_user_id = None
+        user_id = None
         if principal and principal.workspace_id:
             workspace_id = principal.workspace_id
-            canonical_user_id = principal.user_id
+            user_id = principal.user_id
         else:
             from sqlalchemy import select
 
@@ -336,25 +335,24 @@ def register_event_handlers(app: AsyncApp) -> None:
                     )
                     su_id = su_result.scalar_one_or_none()
                     if su_id:
-                        canonical_user_id = su_id
+                        user_id = su_id
 
-            if not workspace_id:
-                await say(
-                    text=(
-                        "I couldn't verify your workspace identity, so I can't search "
-                        "or summarize workspace data for this request."
-                    ),
-                    thread_ts=thread_ts,
-                )
-                return
+        if not workspace_id or not user_id:
+            await say(
+                text=(
+                    "I couldn't verify your workspace identity, so I can't search "
+                    "or summarize workspace data for this request."
+                ),
+                thread_ts=thread_ts,
+            )
+            return
 
         response = await agent_service.process_message(
             user_slack_id=user,
             message=text,
             channel_id=channel,
             thread_ts=thread_ts,
-            user_channel_ids=user_channel_ids,
-            canonical_user_id=canonical_user_id,
+            user_id=user_id,
             workspace_id=workspace_id,
         )
 
@@ -435,8 +433,42 @@ async def _handle_digest_command(
                 )
                 return
 
+            # Resolve canonical user ID for personalized digest
+            from app.security.auth import resolve_slack_principal
+
+            principal = await resolve_slack_principal(user_slack_id)
+            user_id = None
+            if principal:
+                user_id = principal.user_id
+            else:
+                from sqlalchemy import select
+
+                from app.models.user import SlackUser
+                from app.models.workspace import Workspace
+
+                async with _get_async_session_local()() as session:
+                    ws_result = await session.execute(
+                        select(Workspace).where(Workspace.is_active.is_(True)).limit(1)
+                    )
+                    workspace = ws_result.scalar_one_or_none()
+                    if workspace:
+                        su_result = await session.execute(
+                            select(SlackUser.id).where(
+                                SlackUser.slack_user_id == user_slack_id,
+                                SlackUser.workspace_id == workspace.id,
+                            )
+                        )
+                        user_id = su_result.scalar_one_or_none()
+
+            if not user_id:
+                await say(
+                    text="❌ Could not determine your user identity.",
+                    thread_ts=thread_ts,
+                )
+                return
+
             result = await digest_svc.generate_personalized_digest(
-                user_slack_id=user_slack_id,
+                user_id=user_id,
             )
             if result:
                 await say(
@@ -497,12 +529,41 @@ async def _handle_digest_command(
                 from app.models.channel import ChannelType
 
                 if ch.channel_type != ChannelType.PUBLIC:
-                    user_channels = (
-                        await _get_membership_service().get_user_channel_ids(
-                            user_slack_id
+                    from app.security.auth import resolve_slack_principal
+
+                    principal = await resolve_slack_principal(user_slack_id)
+                    user_id = None
+                    if principal:
+                        user_id = principal.user_id
+                    else:
+                        from sqlalchemy import select
+
+                        from app.models.user import SlackUser
+
+                        su_result = await session.execute(
+                            select(SlackUser.id).where(
+                                SlackUser.slack_user_id == user_slack_id,
+                                SlackUser.workspace_id == workspace.id,
+                            )
                         )
-                    )
-                    if ch.slack_channel_id not in user_channels:
+                        user_id = su_result.scalar_one_or_none()
+
+                    if user_id:
+                        user_channels = (
+                            await _get_membership_service().get_user_channel_uuids(
+                                user_id, workspace_id=workspace.id
+                            )
+                        )
+                        has_access = ch.id in user_channels
+                    else:
+                        user_channels = (
+                            await _get_membership_service().get_user_channel_ids(
+                                user_slack_id, workspace_id=workspace.id
+                            )
+                        )
+                        has_access = ch.slack_channel_id in user_channels
+
+                    if not has_access:
                         await say(
                             text="🔒 You don't have access to that channel's digest.",
                             thread_ts=thread_ts,

@@ -103,10 +103,9 @@ class AgentService:
         self,
         user_slack_id: str,
         message: str,
+        user_id: uuid.UUID,
         channel_id: str | None = None,
         thread_ts: str | None = None,
-        user_channel_ids: list[str] | None = None,
-        canonical_user_id: uuid.UUID | None = None,
         workspace_id: uuid.UUID | None = None,
     ) -> AgentResponse:
         """
@@ -117,8 +116,7 @@ class AgentService:
             message: The user's message text.
             channel_id: The channel where the message was sent.
             thread_ts: Thread timestamp for threaded replies.
-            user_channel_ids: List of channel IDs the user is a member of.
-            canonical_user_id: Internal user UUID, when mapped.
+            user_id: Canonical user UUID.
             workspace_id: Internal workspace UUID, when mapped.
 
         Returns:
@@ -140,9 +138,7 @@ class AgentService:
             {
                 "schema_version": 1,
                 "platform": "slack",
-                "requesting_user_id": (
-                    str(canonical_user_id) if canonical_user_id else None
-                ),
+                "requesting_user_id": str(user_id),
                 "workspace_id": str(workspace_id) if workspace_id else None,
                 "user_slack_id": user_slack_id,
                 "channel_id": channel_id,
@@ -174,38 +170,19 @@ class AgentService:
             # Build a per-request graph with user-scoped tools
             # The graph creates tools that close over trusted ACL context
             from app.agent.graph import build_agent_graph
+            from app.services.membership_service import membership_service
 
-            # Resolve canonical channel UUIDs when the caller is
-            # authenticated via OIDC (canonical_user_id is set).
-            canonical_channel_ids: list[uuid.UUID] | None = None
-            if canonical_user_id and workspace_id:
-                try:
-                    from sqlalchemy import or_, select
-
-                    from app.database import AsyncSessionLocal
-                    from app.models.membership import ChannelMembership
-
-                    async with AsyncSessionLocal() as session:
-                        conditions = [
-                            ChannelMembership.canonical_user_id == canonical_user_id,
-                        ]
-                        result = await session.execute(
-                            select(ChannelMembership.channel_id).where(
-                                ChannelMembership.workspace_id == workspace_id,
-                                ChannelMembership.is_active.is_(True),
-                                or_(*conditions),
-                            )
-                        )
-                        canonical_channel_ids = [row[0] for row in result.all()]
-                except Exception as e:
-                    logger.warning("Failed to resolve canonical channel IDs: %s", e)
+            # Resolve internal channel UUIDs for membership
+            user_channel_ids = await membership_service.get_user_channel_uuids(
+                user_id=user_id,
+                workspace_id=workspace_id,
+            )
 
             graph = build_agent_graph(
                 user_slack_id=user_slack_id,
-                user_channel_ids=user_channel_ids or [],
                 workspace_id=workspace_id,
-                canonical_user_id=canonical_user_id,
-                canonical_channel_ids=canonical_channel_ids,
+                user_id=user_id,
+                user_channel_ids=user_channel_ids,
             )
 
             # Clean the message (remove bot mention)
@@ -218,10 +195,9 @@ class AgentService:
                     HumanMessage(content=clean_message),
                 ],
                 "user_slack_id": user_slack_id,
-                "user_channel_ids": user_channel_ids or [],
                 "workspace_id": workspace_id,
-                "canonical_user_id": canonical_user_id,
-                "canonical_channel_ids": canonical_channel_ids,
+                "user_id": user_id,
+                "user_channel_ids": user_channel_ids,
             }
 
             max_iterations = _bounded_int_setting(
@@ -277,9 +253,7 @@ class AgentService:
                     {
                         "schema_version": 1,
                         "platform": "slack",
-                        "requesting_user_id": (
-                            str(canonical_user_id) if canonical_user_id else None
-                        ),
+                        "requesting_user_id": str(user_id),
                         "workspace_id": str(workspace_id) if workspace_id else None,
                         "user_slack_id": user_slack_id,
                         "tool_name": detail.tool_name,
@@ -299,9 +273,7 @@ class AgentService:
                 {
                     "schema_version": 1,
                     "platform": "slack",
-                    "requesting_user_id": (
-                        str(canonical_user_id) if canonical_user_id else None
-                    ),
+                    "requesting_user_id": str(user_id),
                     "workspace_id": str(workspace_id) if workspace_id else None,
                     "user_slack_id": user_slack_id,
                     "response_length": len(response_content),

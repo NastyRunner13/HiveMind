@@ -62,6 +62,7 @@ class TestPersonalizedDigestDoesNotStore:
         from app.services.digest_service import DigestService
 
         service = DigestService()
+        user_id = uuid.uuid4()
 
         with (
             patch("app.services.membership_service.membership_service") as mock_ms,
@@ -76,13 +77,18 @@ class TestPersonalizedDigestDoesNotStore:
             ws = _make_workspace()
             private_ch = _make_channel("secret-team", "C_PRIV_1", "private")
 
+            membership_result = MagicMock()
+            membership_result.all.return_value = [(private_ch.id,)]
+
             ws_result = MagicMock()
             ws_result.scalar_one_or_none.return_value = ws
 
             ch_result = MagicMock()
             ch_result.scalars.return_value.all.return_value = [private_ch]
 
-            mock_session.execute = AsyncMock(side_effect=[ws_result, ch_result])
+            mock_session.execute = AsyncMock(
+                side_effect=[membership_result, ws_result, ch_result]
+            )
 
             # Mock the new _generate_channel_summary_only method
             with patch.object(
@@ -91,7 +97,7 @@ class TestPersonalizedDigestDoesNotStore:
                 new_callable=AsyncMock,
                 return_value="Private channel summary",
             ) as mock_summary:
-                result = await service.generate_personalized_digest("U_TEST")
+                result = await service.generate_personalized_digest(user_id=user_id)
 
             # Verify _generate_channel_summary_only was called (NOT generate_channel_digest)
             mock_summary.assert_called_once_with(
@@ -108,6 +114,7 @@ class TestPersonalizedDigestDoesNotStore:
         from app.services.digest_service import DigestService
 
         service = DigestService()
+        user_id = uuid.uuid4()
 
         with (
             patch("app.services.membership_service.membership_service") as mock_ms,
@@ -122,13 +129,18 @@ class TestPersonalizedDigestDoesNotStore:
             ws = _make_workspace()
             private_ch = _make_channel("secret", "C_PRIV_1", "private")
 
+            membership_result = MagicMock()
+            membership_result.all.return_value = [(private_ch.id,)]
+
             ws_result = MagicMock()
             ws_result.scalar_one_or_none.return_value = ws
 
             ch_result = MagicMock()
             ch_result.scalars.return_value.all.return_value = [private_ch]
 
-            mock_session.execute = AsyncMock(side_effect=[ws_result, ch_result])
+            mock_session.execute = AsyncMock(
+                side_effect=[membership_result, ws_result, ch_result]
+            )
 
             with (
                 patch.object(
@@ -143,7 +155,7 @@ class TestPersonalizedDigestDoesNotStore:
                     new_callable=AsyncMock,
                 ) as mock_channel_digest,
             ):
-                await service.generate_personalized_digest("U_TEST")
+                await service.generate_personalized_digest(user_id=user_id)
 
             # generate_channel_digest must NOT be called
             mock_channel_digest.assert_not_called()
@@ -157,21 +169,32 @@ class TestSlackDigestCommandACL:
     async def test_rejects_non_member_for_private_channel(self):
         """Requesting a private channel digest as a non-member
         should get a denial message."""
+        from app.security.auth import AuthenticatedPrincipal
         from app.slack.events import _handle_digest_command
 
         mock_say = AsyncMock()
+
+        ws = _make_workspace()
+        private_ch = _make_channel("secret-proj", "C_SECRET", "private")
+        mock_principal = AuthenticatedPrincipal(
+            user_id=uuid.uuid4(),
+            workspace_id=ws.id,
+            email="attacker@example.com",
+            display_name="Attacker",
+            is_admin=False,
+        )
 
         with (
             patch("app.slack.events.digest_service"),
             patch("app.slack.events.membership_service") as mock_ms,
             patch("app.slack.events.AsyncSessionLocal") as mock_factory,
+            patch(
+                "app.security.auth.resolve_slack_principal", return_value=mock_principal
+            ),
         ):
             mock_session = AsyncMock()
             mock_factory.return_value.__aenter__ = AsyncMock(return_value=mock_session)
             mock_factory.return_value.__aexit__ = AsyncMock(return_value=None)
-
-            ws = _make_workspace()
-            private_ch = _make_channel("secret-proj", "C_SECRET", "private")
 
             ws_result = MagicMock()
             ws_result.scalar_one_or_none.return_value = ws
@@ -181,8 +204,8 @@ class TestSlackDigestCommandACL:
 
             mock_session.execute = AsyncMock(side_effect=[ws_result, ch_result])
 
-            # User is NOT a member of the private channel
-            mock_ms.get_user_channel_ids = AsyncMock(return_value=["C_OTHER"])
+            # User is NOT a member of the private channel UUID
+            mock_ms.get_user_channel_uuids = AsyncMock(return_value=[uuid.uuid4()])
 
             await _handle_digest_command(
                 clean_text="digest #secret-proj",
@@ -205,21 +228,32 @@ class TestSlackDigestCommandACL:
     @pytest.mark.asyncio
     async def test_allows_member_for_private_channel(self):
         """Requesting a private channel digest as a member should succeed."""
+        from app.security.auth import AuthenticatedPrincipal
         from app.slack.events import _handle_digest_command
 
         mock_say = AsyncMock()
+
+        ws = _make_workspace()
+        private_ch = _make_channel("secret-proj", "C_SECRET", "private")
+        mock_principal = AuthenticatedPrincipal(
+            user_id=uuid.uuid4(),
+            workspace_id=ws.id,
+            email="member@example.com",
+            display_name="Member",
+            is_admin=False,
+        )
 
         with (
             patch("app.slack.events.digest_service") as mock_digest_svc,
             patch("app.slack.events.membership_service") as mock_ms,
             patch("app.slack.events.AsyncSessionLocal") as mock_factory,
+            patch(
+                "app.security.auth.resolve_slack_principal", return_value=mock_principal
+            ),
         ):
             mock_session = AsyncMock()
             mock_factory.return_value.__aenter__ = AsyncMock(return_value=mock_session)
             mock_factory.return_value.__aexit__ = AsyncMock(return_value=None)
-
-            ws = _make_workspace()
-            private_ch = _make_channel("secret-proj", "C_SECRET", "private")
 
             ws_result = MagicMock()
             ws_result.scalar_one_or_none.return_value = ws
@@ -229,9 +263,9 @@ class TestSlackDigestCommandACL:
 
             mock_session.execute = AsyncMock(side_effect=[ws_result, ch_result])
 
-            # User IS a member
-            mock_ms.get_user_channel_ids = AsyncMock(
-                return_value=["C_SECRET", "C_OTHER"]
+            # User IS a member (private_ch.id is in the returned UUID list)
+            mock_ms.get_user_channel_uuids = AsyncMock(
+                return_value=[private_ch.id, uuid.uuid4()]
             )
 
             # Mock successful digest generation

@@ -298,8 +298,7 @@ class DigestService:
 
     async def generate_personalized_digest(
         self,
-        user_slack_id: str,
-        canonical_user_id: uuid.UUID | None = None,
+        user_id: uuid.UUID,
         workspace_id: uuid.UUID | None = None,
         hours: int = 24,
     ) -> str | None:
@@ -317,64 +316,39 @@ class DigestService:
         endpoints (GET /api/v1/digests), which return stored digests
         without per-user ACL checks.
 
-        Supports dual-path identity resolution:
-        - canonical_user_id (preferred): Looks up memberships via
-          ChannelMembership.canonical_user_id and filters channels by
-          Channel.id (internal UUID).
-        - user_slack_id (fallback): Legacy Slack ID path using
-          membership_service.get_user_channel_ids().
-
         Args:
-            user_slack_id: The Slack user ID requesting the digest.
-            canonical_user_id: Internal user UUID (OIDC path, preferred).
+            user_id: Canonical user UUID.
+            workspace_id: Optional workspace scope.
             hours: How many hours of history to summarize.
 
         Returns:
             Combined digest string, or None if no activity.
         """
         # --- Resolve channel access ---
-        canonical_channel_ids: list[uuid.UUID] | None = None
+        from app.models.membership import ChannelMembership
 
-        if canonical_user_id:
-            # Preferred path: canonical UUID membership lookup
-            from app.models.membership import ChannelMembership
-
-            async with AsyncSessionLocal() as session:
-                result = await session.execute(
-                    select(ChannelMembership.channel_id).where(
-                        and_(
-                            ChannelMembership.canonical_user_id == canonical_user_id,
-                            ChannelMembership.is_active.is_(True),
-                            (
-                                ChannelMembership.workspace_id == workspace_id
-                                if workspace_id
-                                else True
-                            ),
-                        )
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(ChannelMembership.channel_id).where(
+                    and_(
+                        ChannelMembership.canonical_user_id == user_id,
+                        ChannelMembership.is_active.is_(True),
+                        (
+                            ChannelMembership.workspace_id == workspace_id
+                            if workspace_id
+                            else True
+                        ),
                     )
                 )
-                canonical_channel_ids = [row[0] for row in result.all()]
-
-            if not canonical_channel_ids:
-                logger.info(
-                    f"No canonical memberships for {canonical_user_id} — "
-                    f"cannot generate personalized digest"
-                )
-                return None
-        else:
-            # Fallback: legacy Slack ID path
-            from app.services.membership_service import membership_service
-
-            user_channel_ids = await membership_service.get_user_channel_ids(
-                user_slack_id
             )
+            canonical_channel_ids = [row[0] for row in result.all()]
 
-            if not user_channel_ids:
-                logger.info(
-                    f"No channel memberships for {user_slack_id} — "
-                    f"cannot generate personalized digest"
-                )
-                return None
+        if not canonical_channel_ids:
+            logger.info(
+                f"No memberships for user {user_id} — "
+                f"cannot generate personalized digest"
+            )
+            return None
 
         async with AsyncSessionLocal() as session:
             # Find the workspace
@@ -391,30 +365,14 @@ class DigestService:
                 return None
 
             # Get channels the user is in (public + private)
-            if canonical_channel_ids is not None:
-                # UUID path: filter by Channel.id
-                channel_query = select(Channel).where(
-                    and_(
-                        Channel.workspace_id == workspace.id,
-                        Channel.is_archived.is_(False),
-                        Channel.id.in_(canonical_channel_ids),
-                        Channel.channel_type.notin_(
-                            [ChannelType.DM, ChannelType.GROUP_DM]
-                        ),
-                    )
+            channel_query = select(Channel).where(
+                and_(
+                    Channel.workspace_id == workspace.id,
+                    Channel.is_archived.is_(False),
+                    Channel.id.in_(canonical_channel_ids),
+                    Channel.channel_type.notin_([ChannelType.DM, ChannelType.GROUP_DM]),
                 )
-            else:
-                # Slack ID path: filter by slack_channel_id
-                channel_query = select(Channel).where(
-                    and_(
-                        Channel.workspace_id == workspace.id,
-                        Channel.is_archived.is_(False),
-                        Channel.slack_channel_id.in_(user_channel_ids),
-                        Channel.channel_type.notin_(
-                            [ChannelType.DM, ChannelType.GROUP_DM]
-                        ),
-                    )
-                )
+            )
             result = await session.execute(channel_query)
             channels = result.scalars().all()
 
@@ -442,10 +400,8 @@ class DigestService:
         if not digest_parts:
             return None
 
-        identity_label = str(canonical_user_id) if canonical_user_id else user_slack_id
         logger.info(
-            f"Personalized digest for {identity_label}: "
-            f"{len(digest_parts)} channel summaries"
+            f"Personalized digest for {user_id}: {len(digest_parts)} channel summaries"
         )
         return "\n\n---\n\n".join(digest_parts)
 
@@ -453,10 +409,8 @@ class DigestService:
         self,
         *,
         workspace_id: uuid.UUID,
-        user_slack_id: str,
-        user_channel_ids: list[str],
-        canonical_user_id: uuid.UUID | None = None,
-        canonical_channel_ids: list[uuid.UUID] | None = None,
+        user_id: uuid.UUID,
+        user_channel_ids: list[uuid.UUID],
         channel_name: str | None = None,
         hours: int = 24,
         topic: str | None = None,
@@ -479,16 +433,8 @@ class DigestService:
                 return None
 
             membership_conditions = [Channel.channel_type == ChannelType.PUBLIC]
-            if personalized:
-                if user_channel_ids:
-                    membership_conditions.extend(
-                        [
-                            Channel.slack_channel_id.in_(user_channel_ids),
-                            Channel.external_channel_id.in_(user_channel_ids),
-                        ]
-                    )
-                if canonical_channel_ids:
-                    membership_conditions.append(Channel.id.in_(canonical_channel_ids))
+            if personalized and user_channel_ids:
+                membership_conditions.append(Channel.id.in_(user_channel_ids))
 
             base_channel_filters = [
                 Channel.workspace_id == workspace_id,

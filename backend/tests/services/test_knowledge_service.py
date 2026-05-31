@@ -194,6 +194,8 @@ class TestSearchFilters:
             result = await service.search(
                 query="auth",
                 workspace_id=None,  # type: ignore[arg-type]
+                user_channel_uuids=[uuid.uuid4()],
+                user_id=uuid.uuid4(),
             )
 
         assert result == []
@@ -244,7 +246,8 @@ class TestSearchFilters:
             results = await service.search(
                 query="auth",
                 workspace_id=workspace_id,
-                user_channel_ids=["C123"],
+                user_channel_uuids=[uuid.uuid4()],
+                user_id=uuid.uuid4(),
                 since=source_created_at - timedelta(hours=1),
                 until=source_created_at + timedelta(hours=1),
                 top_k=5,
