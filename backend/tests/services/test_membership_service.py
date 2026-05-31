@@ -90,6 +90,55 @@ class TestGetUserChannelIds:
 
 
 @skip_without_asyncpg
+class TestGetUserChannelUuids:
+    """Tests for get_user_channel_uuids."""
+
+    @pytest.mark.asyncio
+    async def test_returns_channel_uuids_for_active_memberships(
+        self, membership_service
+    ):
+        """Should return channel UUIDs where user has active membership."""
+        user_uuid = uuid.uuid4()
+        ch1_uuid = uuid.uuid4()
+        ch2_uuid = uuid.uuid4()
+
+        with patch("app.services.membership_service.AsyncSessionLocal") as mock_factory:
+            mock_session = AsyncMock()
+            mock_factory.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+            mock_factory.return_value.__aexit__ = AsyncMock(return_value=None)
+
+            # Simulate DB returning channel UUIDs
+            mock_result = MagicMock()
+            mock_result.all.return_value = [
+                (ch1_uuid,),
+                (ch2_uuid,),
+            ]
+            mock_session.execute = AsyncMock(return_value=mock_result)
+
+            result = await membership_service.get_user_channel_uuids(user_uuid)
+
+            assert result == [ch1_uuid, ch2_uuid]
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_list_when_no_memberships(self, membership_service):
+        """Should return empty list when user has no memberships."""
+        user_uuid = uuid.uuid4()
+
+        with patch("app.services.membership_service.AsyncSessionLocal") as mock_factory:
+            mock_session = AsyncMock()
+            mock_factory.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+            mock_factory.return_value.__aexit__ = AsyncMock(return_value=None)
+
+            mock_result = MagicMock()
+            mock_result.all.return_value = []
+            mock_session.execute = AsyncMock(return_value=mock_result)
+
+            result = await membership_service.get_user_channel_uuids(user_uuid)
+
+            assert result == []
+
+
+@skip_without_asyncpg
 class TestHandleMemberJoined:
     """Tests for handle_member_joined."""
 

@@ -35,36 +35,40 @@ def workspace_id():
 
 
 @pytest.fixture
-def user_channel_ids():
-    """Channel IDs the test user is a member of."""
-    return ["C_PUBLIC_1", "C_PUBLIC_2", "C_PRIVATE_1"]
+def user_id():
+    """Canonical user UUID."""
+    return uuid.uuid4()
 
 
 @pytest.fixture
-def tools(user_channel_ids, workspace_id):
+def user_channel_ids():
+    """Channel IDs (UUIDs) the test user is a member of."""
+    return [uuid.uuid4(), uuid.uuid4(), uuid.uuid4()]
+
+
+@pytest.fixture
+def tools(user_channel_ids, workspace_id, user_id):
     """Create tools scoped to our test user."""
     from app.agent.tools import create_tools
 
     return create_tools(
         user_slack_id="U_TEST_USER",
-        user_channel_ids=user_channel_ids,
         workspace_id=workspace_id,
+        user_id=user_id,
+        user_channel_ids=user_channel_ids,
     )
 
 
 @pytest.fixture
-def tools_with_canonical(user_channel_ids, workspace_id):
+def tools_with_canonical(user_channel_ids, workspace_id, user_id):
     """Create tools scoped to our test user with canonical UUIDs."""
-    import uuid as uuid_mod
-
     from app.agent.tools import create_tools
 
     return create_tools(
         user_slack_id="U_TEST_USER",
-        user_channel_ids=user_channel_ids,
         workspace_id=workspace_id,
-        canonical_user_id=uuid_mod.uuid4(),
-        canonical_channel_ids=[uuid_mod.uuid4(), uuid_mod.uuid4()],
+        user_id=user_id,
+        user_channel_ids=user_channel_ids,
     )
 
 
@@ -135,7 +139,9 @@ class TestSearchKnowledgeSecurity:
     """Tests that search_knowledge uses closed-over ACL context."""
 
     @pytest.mark.asyncio
-    async def test_passes_user_context_to_service(self, tools, workspace_id):
+    async def test_passes_user_context_to_service(
+        self, tools, workspace_id, user_channel_ids, user_id
+    ):
         """search_knowledge should pass the closed-over user context."""
         search = get_tool_by_name(tools, "search_knowledge")
 
@@ -147,12 +153,8 @@ class TestSearchKnowledgeSecurity:
             # Verify the search was called with server-derived context
             mock_ks.search.assert_called_once()
             call_kwargs = mock_ks.search.call_args
-            assert call_kwargs.kwargs["user_slack_id"] == "U_TEST_USER"
-            assert call_kwargs.kwargs["user_channel_ids"] == [
-                "C_PUBLIC_1",
-                "C_PUBLIC_2",
-                "C_PRIVATE_1",
-            ]
+            assert call_kwargs.kwargs["user_channel_uuids"] == user_channel_ids
+            assert call_kwargs.kwargs["user_id"] == user_id
             assert call_kwargs.kwargs["workspace_id"] == workspace_id
 
     @pytest.mark.asyncio

@@ -35,6 +35,7 @@ class TestAgentService:
             response = await service.process_message(
                 user_slack_id="U123",
                 message="Hello HiveMind",
+                user_id=uuid.uuid4(),
             )
 
             assert "not fully set up" in response.content
@@ -57,11 +58,13 @@ class TestAgentService:
             patch("app.services.agent_service.settings") as mock_settings,
             patch("app.agent.graph.build_agent_graph", return_value=mock_graph),
             patch("app.services.agent_service.event_bus") as mock_bus,
+            patch("app.services.membership_service.membership_service") as mock_ms,
         ):
             mock_settings.llm_configured = True
             mock_settings.llm_provider = "openrouter"
             mock_settings.llm_model = "test-model"
             mock_bus.publish = AsyncMock()
+            mock_ms.get_user_channel_uuids = AsyncMock(return_value=[uuid.uuid4()])
 
             from app.services.agent_service import AgentService
 
@@ -70,6 +73,7 @@ class TestAgentService:
                 user_slack_id="U123",
                 message="What happened today?",
                 channel_id="C456",
+                user_id=uuid.uuid4(),
                 workspace_id=uuid.uuid4(),
             )
 
@@ -88,6 +92,7 @@ class TestAgentService:
             patch("app.services.agent_service.settings") as mock_settings,
             patch("app.agent.graph.build_agent_graph", return_value=mock_graph),
             patch("app.services.agent_service.event_bus") as mock_bus,
+            patch("app.services.membership_service.membership_service") as mock_ms,
         ):
             mock_settings.llm_configured = True
             mock_settings.llm_provider = "openrouter"
@@ -95,6 +100,7 @@ class TestAgentService:
             mock_settings.agent_max_iterations = 3
             mock_settings.agent_timeout_seconds = 1
             mock_bus.publish = AsyncMock()
+            mock_ms.get_user_channel_uuids = AsyncMock(return_value=[uuid.uuid4()])
 
             from app.services.agent_service import AgentService
 
@@ -103,6 +109,7 @@ class TestAgentService:
                 user_slack_id="U123",
                 message="What happened today?",
                 channel_id="C456",
+                user_id=uuid.uuid4(),
                 workspace_id=uuid.uuid4(),
             )
 
@@ -115,9 +122,11 @@ class TestAgentService:
             patch("app.services.agent_service.settings") as mock_settings,
             patch("app.agent.graph.build_agent_graph", side_effect=Exception("boom")),
             patch("app.services.agent_service.event_bus") as mock_bus,
+            patch("app.services.membership_service.membership_service") as mock_ms,
         ):
             mock_settings.llm_configured = True
             mock_bus.publish = AsyncMock()
+            mock_ms.get_user_channel_uuids = AsyncMock(return_value=[uuid.uuid4()])
 
             from app.services.agent_service import AgentService
 
@@ -125,6 +134,7 @@ class TestAgentService:
             response = await service.process_message(
                 user_slack_id="U123",
                 message="Break things",
+                user_id=uuid.uuid4(),
                 workspace_id=uuid.uuid4(),
             )
 

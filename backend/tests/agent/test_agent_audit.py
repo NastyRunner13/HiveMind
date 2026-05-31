@@ -213,7 +213,7 @@ class TestAuditEventPublishing:
                 user_slack_id="U_TEST",
                 message="search for auth",
                 channel_id="C_TEST",
-                user_channel_ids=["C_TEST"],
+                user_id=uuid.uuid4(),
                 workspace_id=uuid.uuid4(),
             )
 
@@ -262,7 +262,7 @@ class TestAuditEventPublishing:
                 user_slack_id="U_TEST",
                 message="hello",
                 channel_id="C_TEST",
-                user_channel_ids=["C_TEST"],
+                user_id=uuid.uuid4(),
                 workspace_id=uuid.uuid4(),
             )
 
@@ -322,7 +322,7 @@ class TestAuditEventPublishing:
                 user_slack_id="U_TEST",
                 message="check backend",
                 channel_id="C_TEST",
-                user_channel_ids=["C_TEST"],
+                user_id=uuid.uuid4(),
                 workspace_id=uuid.uuid4(),
             )
 
