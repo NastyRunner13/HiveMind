@@ -310,7 +310,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for full details. Quick reference:
 | **M3: Security & Indexing** | Semantic indexing consumer + channel memberships + ACL-scoped agent tools + safe digests + embedding safety | 53 |
 | **M4: Multi-Platform Foundation** | OIDC auth + canonical identities + protected APIs + connector boundary + normalized events | — |
 | **M5: RAG Hardening** | Workspace propagation + source-time filters + bounded tool args + activity summary tool + deletion handling | — |
-| **Total non-live tests** | **226 passing** (May 28, 2026) | |
+| **Total non-live tests** | **222 passing** (May 31, 2026) | |
 
 For detailed component-by-component breakdown, see [`tasks/completed.md`](tasks/completed.md).
 
@@ -318,8 +318,8 @@ For detailed component-by-component breakdown, see [`tasks/completed.md`](tasks/
 
 | Priority | Work Item | Details |
 |----------|-----------|---------|
-| **P0** | Run Alembic migration `0004` against PostgreSQL + pgvector | Canonical identity schema, pending verification |
-| **P0** | Run Slack live regression tests | Verify behavior unchanged post-connector |
+| **P0** | Run Alembic migration `0004` against PostgreSQL + pgvector | ✅ Verified (applied and active) |
+| **P0** | Run Slack live regression tests | ✅ Verified (all tests passing) |
 | **P1** | Complete Slack internal canonical cutover | Remove remaining compatibility lookups |
 | **P1** | Remove legacy event fallback | After queue drain + Slack/Teams parity |
 | **P2** | Microsoft Graph Teams connector | First additional platform |
