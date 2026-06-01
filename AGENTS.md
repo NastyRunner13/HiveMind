@@ -301,7 +301,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for full details. Quick reference:
 
 > **Detailed task tracking has been moved to the [`tasks/`](tasks/) directory.** This section is a compact summary for quick orientation.
 
-### What's Built (Milestones 1–5 Complete)
+### What's Built (Milestones 1–6 Complete)
 
 | Milestone | Summary | Test Count |
 |-----------|---------|------------|
@@ -310,7 +310,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for full details. Quick reference:
 | **M3: Security & Indexing** | Semantic indexing consumer + channel memberships + ACL-scoped agent tools + safe digests + embedding safety | 53 |
 | **M4: Multi-Platform Foundation** | OIDC auth + canonical identities + protected APIs + connector boundary + normalized events | — |
 | **M5: RAG Hardening** | Workspace propagation + source-time filters + bounded tool args + activity summary tool + deletion handling | — |
-| **Total non-live tests** | **222 passing** (May 31, 2026) | |
+| **M6: Conversation Memory** | Cross-session thread-scoped memory for LangGraph agent (loaded, saved, and truncated) | 4 |
+| **Total non-live tests** | **226 passing** (June 1, 2026) | |
 
 For detailed component-by-component breakdown, see [`tasks/completed.md`](tasks/completed.md).
 
@@ -324,7 +325,7 @@ For detailed component-by-component breakdown, see [`tasks/completed.md`](tasks/
 | **P1** | Remove legacy event fallback | After queue drain + Slack/Teams parity |
 | **P2** | Microsoft Graph Teams connector | First additional platform |
 | **P2** | Planner/OneDrive + OBO file access | After normalized Slack+Teams ingestion |
-| **P2** | Feature expansion: Tasks, Nudges, Onboarding, KT | See concept §3, §5, §7, §8 |
+| **P2** | Feature expansion: Tasks, Nudges, Onboarding, KT | See concept §3, §5, §7, §8 (Option A: Conversation Memory is complete) |
 | **Phase 2** | Self-Improving Skills Engine | After real-user Phase 1 stability |
 
 For the full roadmap with checkboxes, see [`tasks/roadmap.md`](tasks/roadmap.md).
