@@ -188,10 +188,55 @@ class AgentService:
             # Clean the message (remove bot mention)
             clean_message = self._clean_mention(message)
 
+            # Load conversation memory from the database if thread_ts is provided
+            history_messages = []
+            if thread_ts:
+                from sqlalchemy import select
+
+                from app.database import AsyncSessionLocal
+                from app.models.agent_session import AgentMessage, AgentSession
+                from app.models.identity import Platform
+
+                async with AsyncSessionLocal() as session:
+                    stmt = select(AgentSession).where(
+                        AgentSession.workspace_id == workspace_id,
+                        AgentSession.platform == Platform.SLACK,
+                        AgentSession.external_session_id == thread_ts,
+                    )
+                    res = await session.execute(stmt)
+                    db_session = res.scalar_one_or_none()
+
+                    if db_session:
+                        # Load last 10 messages to keep LLM prompt concise
+                        msg_stmt = (
+                            select(AgentMessage)
+                            .where(AgentMessage.session_id == db_session.id)
+                            .order_by(AgentMessage.created_at.desc())
+                            .limit(10)
+                        )
+                        msg_res = await session.execute(msg_stmt)
+                        db_messages = list(msg_res.scalars())
+                        db_messages.reverse()  # Chronological order
+
+                        for msg in db_messages:
+                            if msg.role == "human":
+                                history_messages.append(
+                                    HumanMessage(content=msg.content)
+                                )
+                            elif msg.role == "ai":
+                                history_messages.append(AIMessage(content=msg.content))
+                            elif msg.role == "system":
+                                history_messages.append(
+                                    SystemMessage(content=msg.content)
+                                )
+
             # Prepare initial state
             initial_state = {
                 "messages": [
                     SystemMessage(content=SYSTEM_PROMPT),
+                ]
+                + history_messages
+                + [
                     HumanMessage(content=clean_message),
                 ],
                 "user_slack_id": user_slack_id,
@@ -245,6 +290,63 @@ class AgentService:
             response_content = self._extract_response(result)
             tool_calls = self._count_tool_calls(result)
             tool_call_details = self._extract_tool_call_details(result)
+
+            # Save user prompt and AI response to history
+            if thread_ts:
+                from datetime import datetime, timedelta, timezone
+
+                from sqlalchemy import select
+
+                from app.database import AsyncSessionLocal
+                from app.models.agent_session import AgentMessage, AgentSession
+                from app.models.identity import Platform
+
+                try:
+                    async with AsyncSessionLocal() as session:
+                        stmt = select(AgentSession).where(
+                            AgentSession.workspace_id == workspace_id,
+                            AgentSession.platform == Platform.SLACK,
+                            AgentSession.external_session_id == thread_ts,
+                        )
+                        res = await session.execute(stmt)
+                        db_session = res.scalar_one_or_none()
+
+                        if not db_session:
+                            db_session = AgentSession(
+                                workspace_id=workspace_id,
+                                user_id=user_id,
+                                platform=Platform.SLACK,
+                                external_session_id=thread_ts,
+                            )
+                            session.add(db_session)
+                            await session.flush()
+
+                        now = datetime.now(timezone.utc)
+
+                        # Save Human message
+                        user_msg = AgentMessage(
+                            session_id=db_session.id,
+                            role="human",
+                            content=clean_message,
+                            created_at=now,
+                        )
+                        session.add(user_msg)
+
+                        # Save AI response
+                        ai_msg = AgentMessage(
+                            session_id=db_session.id,
+                            role="ai",
+                            content=response_content,
+                            created_at=now + timedelta(seconds=1),
+                        )
+                        session.add(ai_msg)
+
+                        await session.commit()
+                except Exception as e:
+                    # Log but don't fail the request if memory save fails
+                    logger.error(
+                        f"Failed to save agent conversation history: {e}", exc_info=True
+                    )
 
             # Publish per-tool audit events
             for detail in tool_call_details:

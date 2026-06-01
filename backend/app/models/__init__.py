@@ -21,6 +21,7 @@ from app.models.membership import ChannelMembership
 from app.models.message import Message
 from app.models.user import SlackUser
 from app.models.workspace import Workspace
+from app.models.agent_session import AgentSession, AgentMessage
 
 __all__ = [
     "Base",
@@ -37,4 +38,6 @@ __all__ = [
     "DocumentChunk",
     "Digest",
     "ChannelMembership",
+    "AgentSession",
+    "AgentMessage",
 ]

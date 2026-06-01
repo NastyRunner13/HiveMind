@@ -267,7 +267,7 @@ def register_event_handlers(app: AsyncApp) -> None:
         user = event.get("user")
         text = event.get("text", "")
         channel = event.get("channel")
-        thread_ts = event.get("ts")
+        thread_ts = event.get("thread_ts") or event.get("ts")
 
         logger.info(f"Bot mentioned by {user}: {text}")
 
